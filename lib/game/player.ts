@@ -1,5 +1,6 @@
 import { Vec2, vec2, add, scale, normalize, length, fromAngle, distance } from './vec2'
 import * as S from './settings'
+import { MutatorModifiers } from './mutators'
 
 export type AttackType = 'none' | 'light' | 'heavy' | 'pulse_wave'
 
@@ -99,8 +100,18 @@ export function getMovementDirection(input: InputState): Vec2 {
   return length(dir) > 0 ? normalize(dir) : dir
 }
 
-export function updatePlayer(player: Player, input: InputState, dt: number): void {
+export function updatePlayer(player: Player, input: InputState, dt: number, modifiers: MutatorModifiers = {}): void {
   if (!player.isAlive) return
+
+  // Apply modifier calculations
+  const effectiveSpeed = player.speed * (modifiers.speedMultiplier ?? 1)
+  const effectiveDashCost = Math.max(0, S.DASH_COST + (modifiers.dashCostBonus ?? 0))
+  const effectiveDashCooldown = Math.max(0.1, S.DASH_COOLDOWN + (modifiers.dashCooldownBonus ?? 0))
+  const effectiveLightCooldown = Math.max(0.05, S.LIGHT_COOLDOWN + (modifiers.lightCooldownBonus ?? 0))
+  const effectiveHeavyCooldown = Math.max(0.1, S.HEAVY_COOLDOWN + (modifiers.heavyCooldownBonus ?? 0))
+  const effectivePulseCost = Math.max(0, S.PULSE_WAVE_COST + (modifiers.pulseWaveCostBonus ?? 0))
+  const effectiveTimeFlickerCost = Math.max(0, S.TIME_FLICKER_COST + (modifiers.timeFlickerCostBonus ?? 0))
+  const effectiveEnergyRegen = S.ENERGY_REGEN * (modifiers.energyRegenMultiplier ?? 1)
 
   // Timers
   if (player.iframes > 0) player.iframes -= dt
@@ -154,18 +165,18 @@ export function updatePlayer(player: Player, input: InputState, dt: number): voi
       player.heavyCharging = false
       player.attacking = 'heavy'
       player.attackTime = S.HEAVY_DURATION
-      player.attackCooldown = S.HEAVY_COOLDOWN
+      player.attackCooldown = effectiveHeavyCooldown
       player.comboCount = 0
       player.comboTimer = 0
     }
   }
 
   // Dash
-  if (input.dash && !player.isDashing && player.dashCooldown <= 0 && player.energy >= S.DASH_COST && player.attacking === 'none') {
+  if (input.dash && !player.isDashing && player.dashCooldown <= 0 && player.energy >= effectiveDashCost && player.attacking === 'none') {
     player.isDashing = true
     player.dashTime = S.DASH_DURATION
-    player.energy -= S.DASH_COST
-    player.dashCooldown = S.DASH_COOLDOWN
+    player.energy -= effectiveDashCost
+    player.dashCooldown = effectiveDashCooldown
     player.dashDir = length(dir) > 0 ? dir : fromAngle(player.facing)
     player.iframes = S.DASH_DURATION + 0.05
   }
@@ -178,41 +189,41 @@ export function updatePlayer(player: Player, input: InputState, dt: number): voi
     }
   } else if (player.attacking !== 'none') {
     // Slow movement during attacks
-    player.vel = scale(dir, player.speed * 0.3)
+    player.vel = scale(dir, effectiveSpeed * 0.3)
   } else if (player.heavyCharging) {
-    player.vel = scale(dir, player.speed * 0.2)
+    player.vel = scale(dir, effectiveSpeed * 0.2)
   } else {
-    player.vel = scale(dir, player.speed)
+    player.vel = scale(dir, effectiveSpeed)
   }
 
   // Light attack
   if (input.lightAttack && player.attacking === 'none' && player.attackCooldown <= 0 && !player.heavyCharging && !player.isDashing) {
     player.attacking = 'light'
     player.attackTime = S.LIGHT_DURATION
-    player.attackCooldown = S.LIGHT_COOLDOWN
+    player.attackCooldown = effectiveLightCooldown
     player.comboCount = Math.min(player.comboCount + 1, 3)
     player.comboTimer = 0.6
   }
 
   // Pulse Wave
-  if (input.pulseWave && player.energy >= S.PULSE_WAVE_COST && player.attacking === 'none' && !player.isDashing) {
+  if (input.pulseWave && player.energy >= effectivePulseCost && player.attacking === 'none' && !player.isDashing) {
     player.pulseWaveActive = true
     player.pulseWaveTimer = S.PULSE_WAVE_DURATION
-    player.energy -= S.PULSE_WAVE_COST
+    player.energy -= effectivePulseCost
     player.attacking = 'pulse_wave'
     player.attackTime = S.PULSE_WAVE_DURATION
     player.attackCooldown = 0.5
   }
 
   // Time Flicker
-  if (input.timeFlicker && player.energy >= S.TIME_FLICKER_COST && !player.timeFlickerActive) {
+  if (input.timeFlicker && player.energy >= effectiveTimeFlickerCost && !player.timeFlickerActive) {
     player.timeFlickerActive = true
     player.timeFlickerTimer = S.TIME_FLICKER_DURATION
-    player.energy -= S.TIME_FLICKER_COST
+    player.energy -= effectiveTimeFlickerCost
   }
 
   // Energy regen
-  player.energy = Math.min(player.maxEnergy, player.energy + S.ENERGY_REGEN * dt)
+  player.energy = Math.min(player.maxEnergy, player.energy + effectiveEnergyRegen * dt)
 
   // Apply velocity
   player.pos = add(player.pos, scale(player.vel, dt))
@@ -235,14 +246,34 @@ export function updatePlayer(player: Player, input: InputState, dt: number): voi
   }
 }
 
-export function damagePlayer(player: Player, damage: number): boolean {
-  if (player.iframes > 0 || player.isDashing || !player.isAlive) return false
+export interface DamageResult {
+  damaged: boolean
+  wouldBeLethal: boolean
+}
+
+export function damagePlayer(player: Player, damage: number, triggerLastStand: boolean = false): DamageResult {
+  if (player.iframes > 0 || player.isDashing || !player.isAlive) {
+    return { damaged: false, wouldBeLethal: false }
+  }
+
+  const wouldBeLethal = player.hp - damage <= 0
+
+  // If Last Stand is triggered, survive with 1 HP instead of dying
+  if (wouldBeLethal && triggerLastStand) {
+    player.hp = S.LAST_STAND_HP
+    player.iframes = S.LAST_STAND_IFRAMES
+    player.flashTimer = 0.3
+    return { damaged: true, wouldBeLethal: true }
+  }
+
   player.hp -= damage
   player.iframes = S.PLAYER_IFRAMES
   player.flashTimer = 0.1
+
   if (player.hp <= 0) {
     player.hp = 0
     player.isAlive = false
   }
-  return true
+
+  return { damaged: true, wouldBeLethal }
 }

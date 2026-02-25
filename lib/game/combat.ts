@@ -1,7 +1,8 @@
 import { Vec2, vec2, sub, normalize, distance, angle, fromAngle, scale, add } from './vec2'
 import { Player } from './player'
-import { Enemy, damageEnemy, tryDodge } from './enemy'
+import { Enemy, EnemyType, damageEnemy, tryDodge } from './enemy'
 import * as S from './settings'
+import { MutatorModifiers } from './mutators'
 
 export interface HitEffect {
   pos: Vec2
@@ -16,6 +17,8 @@ export interface CombatResult {
   playerDamaged: boolean
   enemiesKilled: number
   energyGained: number
+  killedEnemyTypes: EnemyType[]
+  lastStandTriggered: boolean  // True if a lethal hit was prevented by Last Stand
 }
 
 function angleDiff(a: number, b: number): number {
@@ -25,7 +28,7 @@ function angleDiff(a: number, b: number): number {
   return Math.abs(diff)
 }
 
-export function processPlayerAttacks(player: Player, enemies: Enemy[]): CombatResult {
+export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers: MutatorModifiers = {}): CombatResult {
   const result: CombatResult = {
     hitFreeze: 0,
     cameraShake: { intensity: 0, duration: 0 },
@@ -33,9 +36,20 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[]): CombatRe
     playerDamaged: false,
     enemiesKilled: 0,
     energyGained: 0,
+    killedEnemyTypes: [],
+    lastStandTriggered: false,
   }
 
   if (player.attacking === 'none' || player.attackTime < 0.01) return result
+
+  // Get modifier values
+  const lightDamageMult = modifiers.lightDamageMultiplier ?? 1
+  const heavyDamageMult = modifiers.heavyDamageMultiplier ?? 1
+  const pulseDamageMult = modifiers.pulseWaveDamageMultiplier ?? 1
+  const lightRangeMult = modifiers.lightRangeMultiplier ?? 1
+  const heavyRangeMult = modifiers.heavyRangeMultiplier ?? 1
+  const pulseRangeMult = modifiers.pulseWaveRangeMultiplier ?? 1
+  const knockbackMult = modifiers.knockbackMultiplier ?? 1
 
   let attackRange = 0
   let attackArc = 0
@@ -48,30 +62,30 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[]): CombatRe
 
   switch (player.attacking) {
     case 'light':
-      attackRange = S.LIGHT_RANGE
+      attackRange = S.LIGHT_RANGE * lightRangeMult
       attackArc = S.LIGHT_ARC
-      attackDamage = S.LIGHT_DAMAGE + (player.comboCount - 1) * 3
-      attackKnockback = S.LIGHT_KNOCKBACK
+      attackDamage = Math.round((S.LIGHT_DAMAGE + (player.comboCount - 1) * 3) * lightDamageMult)
+      attackKnockback = S.LIGHT_KNOCKBACK * knockbackMult
       hitFreezeTime = S.HIT_FREEZE_TIME
       shakeIntensity = S.CAMERA_SHAKE_INTENSITY
       shakeDuration = S.CAMERA_SHAKE_DURATION
       hitType = 'light'
       break
     case 'heavy':
-      attackRange = S.HEAVY_RANGE
+      attackRange = S.HEAVY_RANGE * heavyRangeMult
       attackArc = S.HEAVY_ARC
-      attackDamage = S.HEAVY_DAMAGE
-      attackKnockback = S.HEAVY_KNOCKBACK
+      attackDamage = Math.round(S.HEAVY_DAMAGE * heavyDamageMult)
+      attackKnockback = S.HEAVY_KNOCKBACK * knockbackMult
       hitFreezeTime = S.HIT_FREEZE_TIME * 2
       shakeIntensity = S.HEAVY_SHAKE_INTENSITY
       shakeDuration = S.HEAVY_SHAKE_DURATION
       hitType = 'heavy'
       break
     case 'pulse_wave':
-      attackRange = S.PULSE_WAVE_RANGE
+      attackRange = S.PULSE_WAVE_RANGE * pulseRangeMult
       attackArc = S.PULSE_WAVE_ARC
-      attackDamage = S.PULSE_WAVE_DAMAGE
-      attackKnockback = S.PULSE_WAVE_KNOCKBACK
+      attackDamage = Math.round(S.PULSE_WAVE_DAMAGE * pulseDamageMult)
+      attackKnockback = S.PULSE_WAVE_KNOCKBACK * knockbackMult
       hitFreezeTime = S.HIT_FREEZE_TIME * 1.5
       shakeIntensity = S.HEAVY_SHAKE_INTENSITY
       shakeDuration = S.HEAVY_SHAKE_DURATION
@@ -108,7 +122,10 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[]): CombatRe
 
     hitSomething = true
     result.energyGained += S.ENERGY_PER_HIT
-    if (killed) result.enemiesKilled++
+    if (killed) {
+      result.enemiesKilled++
+      result.killedEnemyTypes.push(enemy.type)
+    }
 
     result.hitEffects.push({
       pos: {
@@ -129,7 +146,59 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[]): CombatRe
   return result
 }
 
-export function processEnemyAttacks(player: Player, enemies: Enemy[]): CombatResult {
+// Helper function to apply damage to player with Last Stand support
+function applyPlayerDamage(
+  player: Player,
+  damage: number,
+  canTriggerLastStand: boolean,
+  result: CombatResult,
+  cameraShake: { intensity: number; duration: number },
+  knockback?: Vec2
+): void {
+  if (player.iframes > 0 || player.isDashing) return
+
+  const wouldBeLethal = player.hp - damage <= 0
+
+  // If this would kill the player and Last Stand is available, trigger it
+  if (wouldBeLethal && canTriggerLastStand) {
+    player.hp = S.LAST_STAND_HP
+    player.iframes = S.LAST_STAND_IFRAMES
+    player.flashTimer = 0.3
+    result.playerDamaged = true
+    result.lastStandTriggered = true
+    result.cameraShake = cameraShake
+    result.hitEffects.push({
+      pos: { ...player.pos },
+      type: 'enemy',
+      time: 0.3,
+    })
+    if (knockback) {
+      player.vel = knockback
+    }
+    return
+  }
+
+  // Normal damage
+  player.hp -= damage
+  player.iframes = S.PLAYER_IFRAMES
+  player.flashTimer = 0.15
+  result.playerDamaged = true
+  result.cameraShake = cameraShake
+  result.hitEffects.push({
+    pos: { ...player.pos },
+    type: 'enemy',
+    time: 0.3,
+  })
+  if (knockback) {
+    player.vel = knockback
+  }
+  if (player.hp <= 0) {
+    player.hp = 0
+    player.isAlive = false
+  }
+}
+
+export function processEnemyAttacks(player: Player, enemies: Enemy[], canTriggerLastStand: boolean = false): CombatResult {
   const result: CombatResult = {
     hitFreeze: 0,
     cameraShake: { intensity: 0, duration: 0 },
@@ -137,6 +206,8 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[]): CombatRes
     playerDamaged: false,
     enemiesKilled: 0,
     energyGained: 0,
+    killedEnemyTypes: [],
+    lastStandTriggered: false,
   }
 
   if (!player.isAlive) return result
@@ -151,22 +222,13 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[]): CombatRes
       case 'normal':
       case 'fast':
         if (dist < enemy.attackRange + S.PLAYER_SIZE) {
-          if (player.iframes <= 0 && !player.isDashing) {
-            player.hp -= enemy.damage
-            player.iframes = S.PLAYER_IFRAMES
-            player.flashTimer = 0.15
-            result.playerDamaged = true
-            result.cameraShake = { intensity: 10, duration: 0.15 }
-            result.hitEffects.push({
-              pos: { ...player.pos },
-              type: 'enemy',
-              time: 0.3,
-            })
-            if (player.hp <= 0) {
-              player.hp = 0
-              player.isAlive = false
-            }
-          }
+          applyPlayerDamage(
+            player,
+            enemy.damage,
+            canTriggerLastStand && !result.lastStandTriggered,
+            result,
+            { intensity: 10, duration: 0.15 }
+          )
         }
         break
 
@@ -179,22 +241,13 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[]): CombatRes
           if (proj > 0 && proj < enemy.attackRange) {
             const perpDist = Math.abs(toPlayer.x * shotDir.y - toPlayer.y * shotDir.x)
             if (perpDist < S.PLAYER_SIZE + 8) {
-              if (player.iframes <= 0 && !player.isDashing) {
-                player.hp -= enemy.damage
-                player.iframes = S.PLAYER_IFRAMES
-                player.flashTimer = 0.15
-                result.playerDamaged = true
-                result.cameraShake = { intensity: 8, duration: 0.12 }
-                result.hitEffects.push({
-                  pos: { ...player.pos },
-                  type: 'enemy',
-                  time: 0.3,
-                })
-                if (player.hp <= 0) {
-                  player.hp = 0
-                  player.isAlive = false
-                }
-              }
+              applyPlayerDamage(
+                player,
+                enemy.damage,
+                canTriggerLastStand && !result.lastStandTriggered,
+                result,
+                { intensity: 8, duration: 0.12 }
+              )
             }
           }
         }
@@ -203,24 +256,15 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[]): CombatRes
       case 'heavy':
         // Shockwave
         if (enemy.shockwaveActive && dist < enemy.shockwaveRange + S.PLAYER_SIZE) {
-          if (player.iframes <= 0 && !player.isDashing) {
-            player.hp -= enemy.damage
-            player.iframes = S.PLAYER_IFRAMES
-            player.flashTimer = 0.15
-            result.playerDamaged = true
-            result.cameraShake = { intensity: 15, duration: 0.25 }
-            result.hitEffects.push({
-              pos: { ...player.pos },
-              type: 'enemy',
-              time: 0.3,
-            })
-            const knockDir = normalize(sub(player.pos, enemy.pos))
-            player.vel = scale(knockDir, 400)
-            if (player.hp <= 0) {
-              player.hp = 0
-              player.isAlive = false
-            }
-          }
+          const knockDir = normalize(sub(player.pos, enemy.pos))
+          applyPlayerDamage(
+            player,
+            enemy.damage,
+            canTriggerLastStand && !result.lastStandTriggered,
+            result,
+            { intensity: 15, duration: 0.25 },
+            scale(knockDir, 400)
+          )
         }
         break
     }

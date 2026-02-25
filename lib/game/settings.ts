@@ -79,6 +79,12 @@ export const CAMERA_SHAKE_DURATION = 0.12
 export const HEAVY_SHAKE_INTENSITY = 12
 export const HEAVY_SHAKE_DURATION = 0.2
 
+// Last Stand (one-time lethal hit survival)
+export const LAST_STAND_SLOW_MO_DURATION = 1.0  // Duration of slow-mo effect
+export const LAST_STAND_SLOW_MO_SCALE = 0.15    // Time scale during slow-mo (15% speed)
+export const LAST_STAND_IFRAMES = 1.5           // Invincibility after Last Stand
+export const LAST_STAND_HP = 1                  // HP player survives with
+
 // Enemies
 export const ENEMY_SIZE = 18
 
@@ -120,6 +126,10 @@ export const FAST_ENEMY = {
   dodgeChance: 0.4,
   color: ENEMY_COLORS.fast,
 }
+
+// Contract Banner
+export const CONTRACT_BANNER_Y = 70
+export const CONTRACT_BANNER_HEIGHT = 50
 
 // Waves
 export const WAVE_DELAY = 3.0

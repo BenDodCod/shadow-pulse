@@ -73,6 +73,18 @@ export default function ShadowPulseGame() {
         input.timeFlicker = true
       }
 
+      // Mutator selection (1, 2, 3 keys)
+      const state = gameStateRef.current
+      if (state?.mutatorSelectionActive && !wasPressed) {
+        if (key === '1') {
+          state.mutatorSelectionInput = 1
+        } else if (key === '2') {
+          state.mutatorSelectionInput = 2
+        } else if (key === '3') {
+          state.mutatorSelectionInput = 3
+        }
+      }
+
       // Restart
       if (key === 'r' && gameStateRef.current?.gameOver) {
         gameStateRef.current = resetGame(gameStateRef.current)

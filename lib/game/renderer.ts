@@ -5,6 +5,8 @@ import { ParticleSystem, drawParticles } from './particles'
 import { LevelTheme, Obstacle } from './levels'
 import { fromAngle } from './vec2'
 import * as S from './settings'
+import { Mutator } from './mutators'
+import { ContractState, getContractProgressText, getDifficultyColor } from './contracts'
 
 export function render(
   ctx: CanvasRenderingContext2D,
@@ -22,6 +24,16 @@ export function render(
   level: number,
   levelUpTimer: number,
   levelUpName: string,
+  // Mutator system
+  mutatorSelectionActive: boolean,
+  mutatorChoices: Mutator[],
+  activeMutators: Mutator[],
+  // Contract system
+  contractState: ContractState,
+  // Last Stand system
+  lastStandActive: boolean,
+  lastStandTimer: number,
+  lastStandUsed: boolean,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -54,8 +66,29 @@ export function render(
   // Restore camera transform for HUD
   ctx.restore()
 
+  // Last Stand screen effect
+  if (lastStandActive) {
+    drawLastStandEffect(ctx, lastStandTimer, w, h)
+  }
+
   // HUD
-  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h)
+  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h, lastStandUsed)
+
+  // Active mutators HUD
+  if (activeMutators.length > 0) {
+    drawActiveMutators(ctx, activeMutators, w, h)
+  }
+
+  // Contract banner (top-center)
+  if (contractState.contract) {
+    drawContractBanner(ctx, contractState, w)
+  }
+
+  // Mutator selection screen (takes priority over other overlays)
+  if (mutatorSelectionActive && mutatorChoices.length > 0) {
+    drawMutatorSelection(ctx, mutatorChoices, w, h)
+    return
+  }
 
   // Wave announcement
   if (waveTimer > 0) {
@@ -845,7 +878,7 @@ function drawCracks(ctx: CanvasRenderingContext2D, size: number, hpRatio: number
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 
-function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number): void {
+function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number, lastStandUsed: boolean): void {
   const padding = 24
   const barWidth = 220
   const barHeight = 12
@@ -870,6 +903,38 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   roundRect(ctx, hpX, hpY, barWidth * hpRatio, barHeight, 3)
   ctx.fill()
   ctx.shadowBlur = 0
+
+  // Last Stand indicator (next to HP bar)
+  const lsX = hpX + barWidth + 12
+  const lsY = hpY - 2
+  const lsSize = 16
+
+  if (!lastStandUsed) {
+    // Last Stand available - golden icon
+    ctx.fillStyle = '#ffaa00'
+    ctx.shadowColor = '#ffaa00'
+    ctx.shadowBlur = 8
+    ctx.beginPath()
+    // Draw a small shield/heart icon
+    ctx.arc(lsX + lsSize / 2, lsY + lsSize / 2, lsSize / 2, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+    // Inner symbol
+    ctx.fillStyle = '#ffffff'
+    ctx.font = 'bold 10px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('★', lsX + lsSize / 2, lsY + lsSize / 2 + 4)
+    ctx.textAlign = 'left'
+  } else {
+    // Last Stand used - grayed out
+    ctx.fillStyle = '#333344'
+    ctx.beginPath()
+    ctx.arc(lsX + lsSize / 2, lsY + lsSize / 2, lsSize / 2, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#555566'
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
 
   // Energy Bar
   const enY = hpY + barHeight + 6
@@ -998,6 +1063,38 @@ function drawLevelAnnouncement(ctx: CanvasRenderingContext2D, level: number, nam
   ctx.textAlign = 'left'
 }
 
+function drawLastStandEffect(ctx: CanvasRenderingContext2D, timer: number, w: number, h: number): void {
+  const progress = timer / S.LAST_STAND_SLOW_MO_DURATION
+  const now = Date.now()
+
+  // Pulsing golden vignette overlay
+  const pulseAlpha = (Math.sin(now * 0.01) * 0.15 + 0.25) * progress
+  const gradient = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w * 0.7)
+  gradient.addColorStop(0, 'transparent')
+  gradient.addColorStop(0.5, 'transparent')
+  gradient.addColorStop(1, `rgba(255, 170, 0, ${pulseAlpha})`)
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, w, h)
+
+  // "LAST STAND!" announcement (fades out over time)
+  const textAlpha = Math.min(1, progress * 2) // Fade faster
+  ctx.fillStyle = `rgba(255, 200, 50, ${textAlpha})`
+  ctx.shadowColor = '#ffaa00'
+  ctx.shadowBlur = 40
+  ctx.font = 'bold 56px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillText('LAST STAND!', w / 2, h / 2 - 60)
+
+  // Subtitle
+  ctx.fillStyle = `rgba(255, 255, 255, ${textAlpha * 0.7})`
+  ctx.shadowBlur = 0
+  ctx.font = '18px monospace'
+  ctx.fillText('SURVIVE!', w / 2, h / 2 - 20)
+
+  ctx.textAlign = 'left'
+  ctx.shadowBlur = 0
+}
+
 function drawGameOver(ctx: CanvasRenderingContext2D, score: number, highScore: number, level: number, w: number, h: number): void {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
   ctx.fillRect(0, 0, w, h)
@@ -1028,6 +1125,253 @@ function drawGameOver(ctx: CanvasRenderingContext2D, score: number, highScore: n
   ctx.font = '14px monospace'
   ctx.fillText('Press R to restart', w / 2, h / 2 + 90)
   ctx.textAlign = 'left'
+}
+
+// ─── Mutator UI ─────────────────────────────────────────────────────────────
+
+function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[], w: number, h: number): void {
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.88)'
+  ctx.fillRect(0, 0, w, h)
+
+  // Title
+  ctx.fillStyle = '#7b2fff'
+  ctx.shadowColor = '#7b2fff'
+  ctx.shadowBlur = 30
+  ctx.font = 'bold 36px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillText('CHOOSE YOUR MUTATOR', w / 2, 90)
+  ctx.shadowBlur = 0
+
+  // Subtitle
+  ctx.fillStyle = '#ffffff66'
+  ctx.font = '14px monospace'
+  ctx.fillText('Press 1, 2, or 3 to select', w / 2, 120)
+
+  // Card dimensions
+  const cardWidth = 300
+  const cardHeight = 280
+  const cardSpacing = 40
+  const totalWidth = choices.length * cardWidth + (choices.length - 1) * cardSpacing
+  const startX = (w - totalWidth) / 2
+  const cardY = (h - cardHeight) / 2 + 20
+
+  // Rarity colors
+  const rarityBgColors: Record<string, string> = {
+    common: '#222233',
+    rare: '#223344',
+    epic: '#332244',
+  }
+  const rarityBorderColors: Record<string, string> = {
+    common: '#445566',
+    rare: '#4488aa',
+    epic: '#8844cc',
+  }
+
+  for (let i = 0; i < choices.length; i++) {
+    const mutator = choices[i]
+    const cardX = startX + i * (cardWidth + cardSpacing)
+
+    // Card background
+    ctx.fillStyle = rarityBgColors[mutator.rarity]
+    ctx.strokeStyle = rarityBorderColors[mutator.rarity]
+    ctx.lineWidth = 2
+    roundRect(ctx, cardX, cardY, cardWidth, cardHeight, 12)
+    ctx.fill()
+    ctx.stroke()
+
+    // Rarity badge
+    ctx.fillStyle = mutator.color + '66'
+    ctx.font = '10px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(mutator.rarity.toUpperCase(), cardX + cardWidth / 2, cardY + 24)
+
+    // Icon
+    ctx.font = 'bold 48px monospace'
+    ctx.fillStyle = mutator.color
+    ctx.shadowColor = mutator.color
+    ctx.shadowBlur = 15
+    ctx.fillText(mutator.icon, cardX + cardWidth / 2, cardY + 90)
+    ctx.shadowBlur = 0
+
+    // Name
+    ctx.font = 'bold 18px monospace'
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(mutator.name, cardX + cardWidth / 2, cardY + 130)
+
+    // Description (with word wrap)
+    ctx.font = '13px monospace'
+    ctx.fillStyle = '#ffffffaa'
+    const lines = wrapText(mutator.description, 28)
+    for (let j = 0; j < lines.length; j++) {
+      ctx.fillText(lines[j], cardX + cardWidth / 2, cardY + 165 + j * 20)
+    }
+
+    // Key prompt
+    ctx.font = 'bold 28px monospace'
+    ctx.fillStyle = mutator.color
+    ctx.shadowColor = mutator.color
+    ctx.shadowBlur = 12
+    ctx.fillText(`[${i + 1}]`, cardX + cardWidth / 2, cardY + cardHeight - 30)
+    ctx.shadowBlur = 0
+  }
+
+  ctx.textAlign = 'left'
+}
+
+function drawActiveMutators(ctx: CanvasRenderingContext2D, mutators: Mutator[], w: number, h: number): void {
+  const padding = 24
+  const iconSize = 26
+  const iconSpacing = 4
+
+  // Label
+  ctx.fillStyle = '#ffffff44'
+  ctx.font = '10px monospace'
+  ctx.textAlign = 'left'
+  ctx.fillText('MUTATORS', padding, padding + 10)
+
+  // Icons
+  for (let i = 0; i < mutators.length; i++) {
+    const m = mutators[i]
+    const x = padding + i * (iconSize + iconSpacing)
+    const y = padding + 16
+
+    // Icon background
+    ctx.fillStyle = m.color + '33'
+    ctx.strokeStyle = m.color + '88'
+    ctx.lineWidth = 1
+    roundRect(ctx, x, y, iconSize, iconSize, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    // Icon text
+    ctx.font = '14px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillStyle = m.color
+    ctx.fillText(m.icon, x + iconSize / 2, y + iconSize / 2 + 5)
+  }
+
+  ctx.textAlign = 'left'
+}
+
+function drawContractBanner(ctx: CanvasRenderingContext2D, contractState: ContractState, w: number): void {
+  const contract = contractState.contract
+  if (!contract) return
+
+  const { status, progress } = contractState
+  const bannerY = S.CONTRACT_BANNER_Y
+  const bannerH = S.CONTRACT_BANNER_HEIGHT
+  const bannerW = 320
+  const bannerX = (w - bannerW) / 2
+
+  // Background color based on status
+  let bgColor: string
+  let borderColor: string
+  let glowColor: string | null = null
+
+  switch (status) {
+    case 'completed':
+      bgColor = '#0a2a15'
+      borderColor = '#44ff88'
+      glowColor = '#44ff88'
+      break
+    case 'failed':
+      bgColor = '#2a0a0f'
+      borderColor = '#ff445588'
+      break
+    default: // active
+      bgColor = '#0a0f1a'
+      borderColor = getDifficultyColor(contract.difficulty) + '88'
+      break
+  }
+
+  // Glow effect for completed
+  if (glowColor) {
+    ctx.shadowColor = glowColor
+    ctx.shadowBlur = 15
+  }
+
+  // Banner background
+  ctx.fillStyle = bgColor
+  ctx.strokeStyle = borderColor
+  ctx.lineWidth = 2
+  roundRect(ctx, bannerX, bannerY, bannerW, bannerH, 8)
+  ctx.fill()
+  ctx.stroke()
+
+  // Reset shadow
+  ctx.shadowColor = 'transparent'
+  ctx.shadowBlur = 0
+
+  // Difficulty badge
+  const diffColor = getDifficultyColor(contract.difficulty)
+  const badgeW = 50
+  const badgeH = 16
+  const badgeX = bannerX + 10
+  const badgeY = bannerY + 8
+
+  ctx.fillStyle = diffColor + '33'
+  ctx.strokeStyle = diffColor
+  ctx.lineWidth = 1
+  roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4)
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.font = '10px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = diffColor
+  ctx.fillText(contract.difficulty.toUpperCase(), badgeX + badgeW / 2, badgeY + 12)
+
+  // Contract name
+  ctx.font = 'bold 14px monospace'
+  ctx.textAlign = 'left'
+  ctx.fillStyle = status === 'failed' ? '#ffffff66' : '#ffffffdd'
+  ctx.fillText(contract.name, badgeX + badgeW + 10, badgeY + 12)
+
+  // Progress text / status
+  const progressText = getContractProgressText(contract, progress, status)
+  ctx.font = '12px monospace'
+  ctx.textAlign = 'left'
+
+  if (status === 'completed') {
+    ctx.fillStyle = '#44ff88'
+  } else if (status === 'failed') {
+    ctx.fillStyle = '#ff4466'
+  } else {
+    ctx.fillStyle = '#ffffffaa'
+  }
+
+  ctx.fillText(progressText, bannerX + 10, bannerY + bannerH - 10)
+
+  // Reward preview (right side)
+  if (status === 'active') {
+    ctx.font = '10px monospace'
+    ctx.textAlign = 'right'
+    ctx.fillStyle = '#ffffff44'
+    const rewardText = `+${contract.scoreBonus} | +${contract.hpRestore}HP | +${contract.energyRestore}E`
+    ctx.fillText(rewardText, bannerX + bannerW - 10, bannerY + bannerH - 10)
+  }
+
+  ctx.textAlign = 'left'
+}
+
+// Helper for text wrapping
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(' ')
+  const lines: string[] = []
+  let current = ''
+
+  for (const word of words) {
+    if ((current + ' ' + word).trim().length <= maxChars) {
+      current = (current + ' ' + word).trim()
+    } else {
+      if (current) lines.push(current)
+      current = word
+    }
+  }
+  if (current) lines.push(current)
+
+  return lines
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
