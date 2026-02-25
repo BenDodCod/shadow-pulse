@@ -53,6 +53,15 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 | `scores.ts` | Score persistence — localStorage + optional Supabase leaderboard, graceful fallback |
 | `seeded-rng.ts` | Mulberry32 PRNG — module-level `rng()` replaces `Math.random()` in waves/affixes/mutators/contracts; swapped for seeded fn in Daily Challenge mode |
 
+## Vercel Integration
+
+| File | Purpose |
+|------|---------|
+| `vercel.json` | Deployment config — region set to `fra1` (Frankfurt) |
+| `.env.local` | Local env vars (not committed) — `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
+
+Deploy via `vercel --prod` or push to the connected Git branch. Preview deployments are created automatically on PRs. Environment variables must be configured in the Vercel dashboard for production.
+
 ## Supabase Integration (`lib/supabase/`)
 
 | File | Purpose |
