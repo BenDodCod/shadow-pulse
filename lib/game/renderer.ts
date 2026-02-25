@@ -1,5 +1,5 @@
 import { Player } from './player'
-import { Enemy } from './enemy'
+import { Enemy, EnemyType } from './enemy'
 import { Camera } from './camera'
 import { ParticleSystem, drawParticles } from './particles'
 import { LevelTheme, Obstacle } from './levels'
@@ -34,6 +34,8 @@ export function render(
   lastStandActive: boolean,
   lastStandTimer: number,
   lastStandUsed: boolean,
+  // Death recap
+  damageByEnemyType: Record<EnemyType, number>,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -102,7 +104,7 @@ export function render(
 
   // Game Over
   if (gameOver) {
-    drawGameOver(ctx, score, highScore, level, w, h)
+    drawGameOver(ctx, score, highScore, level, damageByEnemyType, w, h)
   }
 }
 
@@ -1095,7 +1097,15 @@ function drawLastStandEffect(ctx: CanvasRenderingContext2D, timer: number, w: nu
   ctx.shadowBlur = 0
 }
 
-function drawGameOver(ctx: CanvasRenderingContext2D, score: number, highScore: number, level: number, w: number, h: number): void {
+function drawGameOver(
+  ctx: CanvasRenderingContext2D,
+  score: number,
+  highScore: number,
+  level: number,
+  damageByEnemyType: Record<EnemyType, number>,
+  w: number,
+  h: number
+): void {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
   ctx.fillRect(0, 0, w, h)
 
@@ -1104,27 +1114,67 @@ function drawGameOver(ctx: CanvasRenderingContext2D, score: number, highScore: n
   ctx.shadowBlur = 30
   ctx.font = 'bold 56px monospace'
   ctx.textAlign = 'center'
-  ctx.fillText('SHADOW FALLS', w / 2, h / 2 - 70)
+  ctx.fillText('SHADOW FALLS', w / 2, h / 2 - 100)
 
   ctx.shadowBlur = 0
   ctx.fillStyle = '#ffffff66'
   ctx.font = '16px monospace'
-  ctx.fillText(`Reached Level ${level}`, w / 2, h / 2 - 20)
+  ctx.fillText(`Reached Level ${level}`, w / 2, h / 2 - 55)
 
+  // Death Recap - find top damage source
+  const topDamageType = getTopDamageSource(damageByEnemyType)
+  const topDamageColor = topDamageType !== 'none' ? S.ENEMY_COLORS[topDamageType as keyof typeof S.ENEMY_COLORS] : '#ffffff'
+  const hint = S.DEATH_HINTS[topDamageType] || S.DEATH_HINTS.none
+
+  // Show top damage source
+  if (topDamageType !== 'none') {
+    ctx.fillStyle = '#ffffff88'
+    ctx.font = '14px monospace'
+    ctx.fillText('Most damage from:', w / 2, h / 2 - 20)
+
+    ctx.fillStyle = topDamageColor
+    ctx.shadowColor = topDamageColor
+    ctx.shadowBlur = 10
+    ctx.font = 'bold 18px monospace'
+    ctx.fillText(topDamageType.toUpperCase(), w / 2, h / 2 + 5)
+    ctx.shadowBlur = 0
+  }
+
+  // Show hint
+  ctx.fillStyle = '#aaaaaa'
+  ctx.font = '13px monospace'
+  ctx.fillText(hint, w / 2, h / 2 + 35)
+
+  // Score
   ctx.fillStyle = '#ffffffcc'
   ctx.font = '20px monospace'
-  ctx.fillText(`SCORE: ${score}`, w / 2, h / 2 + 15)
+  ctx.fillText(`SCORE: ${score}`, w / 2, h / 2 + 75)
 
   if (score >= highScore && highScore > 0) {
     ctx.fillStyle = '#ffaa22'
     ctx.font = 'bold 16px monospace'
-    ctx.fillText('NEW HIGH SCORE!', w / 2, h / 2 + 48)
+    ctx.fillText('NEW HIGH SCORE!', w / 2, h / 2 + 105)
   }
 
   ctx.fillStyle = '#ffffff66'
   ctx.font = '14px monospace'
-  ctx.fillText('Press R to restart', w / 2, h / 2 + 90)
+  ctx.fillText('Press R to restart', w / 2, h / 2 + 145)
   ctx.textAlign = 'left'
+}
+
+// Helper to find which enemy type dealt the most damage
+function getTopDamageSource(damageByType: Record<EnemyType, number>): string {
+  let topType: string = 'none'
+  let topDamage = 0
+
+  for (const [type, damage] of Object.entries(damageByType)) {
+    if (damage > topDamage) {
+      topDamage = damage
+      topType = type
+    }
+  }
+
+  return topType
 }
 
 // ─── Mutator UI ─────────────────────────────────────────────────────────────

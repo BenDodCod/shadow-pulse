@@ -19,6 +19,9 @@ export interface CombatResult {
   energyGained: number
   killedEnemyTypes: EnemyType[]
   lastStandTriggered: boolean  // True if a lethal hit was prevented by Last Stand
+  // Death recap tracking
+  damageDealt: number          // How much damage was dealt to player this frame
+  damageSourceType: EnemyType | null  // Which enemy type dealt the damage
 }
 
 function angleDiff(a: number, b: number): number {
@@ -38,6 +41,8 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
     energyGained: 0,
     killedEnemyTypes: [],
     lastStandTriggered: false,
+    damageDealt: 0,
+    damageSourceType: null,
   }
 
   if (player.attacking === 'none' || player.attackTime < 0.01) return result
@@ -150,6 +155,7 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
 function applyPlayerDamage(
   player: Player,
   damage: number,
+  enemyType: EnemyType,
   canTriggerLastStand: boolean,
   result: CombatResult,
   cameraShake: { intensity: number; duration: number },
@@ -158,6 +164,10 @@ function applyPlayerDamage(
   if (player.iframes > 0 || player.isDashing) return
 
   const wouldBeLethal = player.hp - damage <= 0
+
+  // Track damage source for death recap
+  result.damageDealt += damage
+  result.damageSourceType = enemyType
 
   // If this would kill the player and Last Stand is available, trigger it
   if (wouldBeLethal && canTriggerLastStand) {
@@ -208,6 +218,8 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
     energyGained: 0,
     killedEnemyTypes: [],
     lastStandTriggered: false,
+    damageDealt: 0,
+    damageSourceType: null,
   }
 
   if (!player.isAlive) return result
@@ -225,6 +237,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
           applyPlayerDamage(
             player,
             enemy.damage,
+            enemy.type,
             canTriggerLastStand && !result.lastStandTriggered,
             result,
             { intensity: 10, duration: 0.15 }
@@ -244,6 +257,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
               applyPlayerDamage(
                 player,
                 enemy.damage,
+                enemy.type,
                 canTriggerLastStand && !result.lastStandTriggered,
                 result,
                 { intensity: 8, duration: 0.12 }
@@ -260,6 +274,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
           applyPlayerDamage(
             player,
             enemy.damage,
+            enemy.type,
             canTriggerLastStand && !result.lastStandTriggered,
             result,
             { intensity: 15, duration: 0.25 },

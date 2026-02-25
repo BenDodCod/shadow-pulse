@@ -51,6 +51,8 @@ export interface GameState {
   lastStandUsed: boolean
   lastStandActive: boolean
   lastStandTimer: number
+  // Death recap (damage tracking by enemy type)
+  damageByEnemyType: Record<EnemyType, number>
 }
 
 export function createGameState(): GameState {
@@ -87,6 +89,8 @@ export function createGameState(): GameState {
     lastStandUsed: false,
     lastStandActive: false,
     lastStandTimer: 0,
+    // Death recap
+    damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
   }
 }
 
@@ -236,6 +240,10 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       // Different particle color for Last Stand
       const particleColor = enemyCombat.lastStandTriggered ? '#ffaa00' : '#ff2244'
       emitHitSparks(state.particles, effect.pos, particleColor, enemyCombat.lastStandTriggered ? 20 : 10)
+    }
+    // Track damage for death recap
+    if (enemyCombat.damageSourceType) {
+      state.damageByEnemyType[enemyCombat.damageSourceType] += enemyCombat.damageDealt
     }
     // Track damage for contract
     cProgress.wasHit = true
@@ -391,6 +399,8 @@ export function renderGame(state: GameState, ctx: CanvasRenderingContext2D): voi
     state.lastStandActive,
     state.lastStandTimer,
     state.lastStandUsed,
+    // Death recap
+    state.damageByEnemyType,
   )
 }
 

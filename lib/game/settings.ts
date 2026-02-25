@@ -131,6 +131,15 @@ export const FAST_ENEMY = {
 export const CONTRACT_BANNER_Y = 70
 export const CONTRACT_BANNER_HEIGHT = 50
 
+// Death Recap Hints
+export const DEATH_HINTS: Record<string, string> = {
+  normal: "Normal enemies swarm you. Keep moving and don't get surrounded!",
+  sniper: "Snipers telegraph with a red laser. Dash diagonally when you see it!",
+  heavy: "Heavy shockwaves have limited range. Stay outside and strike after!",
+  fast: "Fast enemies dodge light attacks. Use heavy or pulse wave to catch them!",
+  none: "Keep practicing! Use dash (Space/Shift) to avoid damage.",
+}
+
 // Waves
 export const WAVE_DELAY = 3.0
 export let ARENA_RADIUS = 300 // mutable – updated by engine on level transition
