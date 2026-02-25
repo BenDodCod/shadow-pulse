@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Remove-Item -Recurse -Force \"d:\\\\shadow_pulse\\\\.next\" -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"Cache cleared\")",
+      "Read(//c/Users/matanb/AppData/Local/Temp/**)",
+      "mcp__perplexity__perplexity_ask"
+    ],
+    "additionalDirectories": [
+      "d:\\shadow_pulse\\.next"
+    ]
+  }
+}
