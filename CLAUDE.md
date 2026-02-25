@@ -7,12 +7,15 @@ Allwayes use "AskUserQuestion" tool when in plan mode.
 ## Build Commands
 
 ```bash
-npm run dev      # Start development server (localhost:3000)
-npm run build    # Production build
-npm run lint     # Run ESLint
+npm run dev        # Start development server (localhost:3000)
+npm run build      # Production build
+npm run lint       # Run ESLint
+npm run test       # Run Vitest unit tests (watch mode)
+npm run test:run   # Run Vitest once
+npm run test:e2e   # Run Playwright end-to-end tests
 ```
 
-No test framework is configured.
+Vitest and @playwright/test are configured.
 
 ## Architecture Overview
 
@@ -36,24 +39,47 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 | `engine.ts` | GameState interface, create/update/render orchestration, wave & level transitions |
 | `player.ts` | Player entity, movement, 4 attack types (light, heavy, pulse, time flicker), dash |
 | `enemy.ts` | 4 enemy archetypes: Normal, Sniper, Heavy, Fast - each with unique AI |
-| `combat.ts` | Arc-based hit detection, damage calculation, knockback physics |
-| `renderer.ts` | All canvas drawing (825 LOC) - arena, entities, particles, HUD |
+| `combat.ts` | Arc-based hit detection, damage calculation, knockback physics, Last Stand trigger |
+| `renderer.ts` | All canvas drawing (1563 LOC) - arena, entities, particles, HUD, mutator draft, contract UI, death recap |
 | `settings.ts` | **Single source of truth** for all game constants and balance values |
 | `particles.ts` | Particle system for visual effects |
 | `levels.ts` | 6 themed arenas with obstacles, difficulty scaling |
 | `waves.ts` | Enemy wave composition and spawn logic |
 | `camera.ts` | Screen shake effects |
 | `vec2.ts` | 2D vector math utilities |
+| `mutators.ts` | Post-wave roguelike upgrade drafts — 15 mutators (3 rarities) with stat/damage/cooldown modifiers |
+| `affixes.ts` | Per-wave enemy modifiers — 6 affix types (Swift/Frenzied/Armored/Regenerating/Volatile/Berserker) across 3 tiers |
+| `contracts.ts` | Optional wave objectives — 9 contracts (easy/medium/hard) with score/HP/energy rewards |
+| `scores.ts` | Score persistence — localStorage + optional Supabase leaderboard, graceful fallback |
+
+## Supabase Integration (`lib/supabase/`)
+
+| File | Purpose |
+|------|---------|
+| `client.ts` | Singleton Supabase client; checks `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
+| `types.ts` | Auto-generated database schema types (profiles, game_sessions, leaderboard tables) |
 
 ## Key Patterns
 
-**GameState** (in `engine.ts`) is the central data structure containing player, enemies, particles, wave/level info, and score.
+**GameState** (in `engine.ts`) is the central data structure. Beyond the basics (player, enemies, particles, wave/level, score) it now includes: active mutators & combined modifiers, contract state & progress, current wave affix, Last Stand flags, death recap damage tracking, and `timeScale` (0.15 during slow-mo, 1.0 normally).
 
-**Settings-driven design**: All balance values (damage, cooldowns, speeds, ranges) live in `settings.ts`. Modify there, not inline.
+**Settings-driven design**: All balance values (damage, cooldowns, speeds, ranges, Last Stand constants, death hints) live in `settings.ts`. Modify there, not inline.
 
 **Entity model**: Player and Enemy share position/velocity/health patterns but have distinct behavior implementations.
 
 **Combat flow**: Attack input → check enemies in arc range → apply damage/knockback → spawn hit effects → camera shake → particles
+
+## Game Systems
+
+**Last Stand** — One-time lethal-hit survival per run. Triggers automatically on a killing blow: player survives with 1 HP, 15% time scale for 1 second, 1.5s iframes. Constants in `settings.ts`.
+
+**Death Recap** — Tracks `damageByEnemyType` throughout the run. On game over, highlights the primary damage source and shows a contextual tip (`DEATH_HINTS` in `settings.ts`).
+
+**Mutator Draft** — After each wave, player chooses 1 of 3 weighted-random mutators (common/rare/epic). Modifiers (damage multipliers, stat bonuses, cooldown changes) stack multiplicatively/additively via `computeCombinedModifiers()`. Select with `1 / 2 / 3`.
+
+**Wave Affixes** — Each wave may roll one affix starting from wave 2. Tier (Mild/Medium/Strong) scales with wave number and modifies all enemies spawned that wave.
+
+**Wave Contracts** — Optional objective offered before each wave (e.g. "take no damage", "kill sniper first"). Evaluated at wave end; rewards score bonus, HP restore, or energy restore.
 
 ## Controls
 
@@ -63,9 +89,12 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 - **L**: Pulse wave (AoE)
 - **;**: Time flicker (slow enemies)
 - **Space/Shift**: Dash
+- **1 / 2 / 3**: Select mutator (when post-wave draft is active)
+- **R**: Restart (on game over screen)
 
 ## Notes
 
 - `next.config.mjs` ignores TypeScript build errors
-- High scores persist to `localStorage`
+- Scores persist to localStorage with optional Supabase cloud leaderboard (`lib/game/scores.ts`); game works offline without Supabase configured
 - Game is SSR-disabled (dynamic import in `app/page.tsx`)
+- Vercel deployment config in `vercel.json` (fra1 region)
