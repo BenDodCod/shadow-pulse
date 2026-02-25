@@ -7,6 +7,7 @@ import { fromAngle } from './vec2'
 import * as S from './settings'
 import { Mutator } from './mutators'
 import { ContractState, getContractProgressText, getDifficultyColor } from './contracts'
+import { WaveAffix } from './affixes'
 
 export function render(
   ctx: CanvasRenderingContext2D,
@@ -30,6 +31,8 @@ export function render(
   activeMutators: Mutator[],
   // Contract system
   contractState: ContractState,
+  // Affix system
+  currentAffix: WaveAffix | null,
   // Last Stand system
   lastStandActive: boolean,
   lastStandTimer: number,
@@ -94,7 +97,12 @@ export function render(
 
   // Wave announcement
   if (waveTimer > 0) {
-    drawWaveAnnouncement(ctx, wave, waveTimer, levelTheme, w, h)
+    drawWaveAnnouncement(ctx, wave, waveTimer, levelTheme, currentAffix, w, h)
+  }
+
+  // Active wave affix HUD indicator
+  if (currentAffix) {
+    drawCurrentAffix(ctx, currentAffix, activeMutators.length, w, h)
   }
 
   // Level-up announcement
@@ -670,6 +678,12 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
     ctx.fill()
   }
 
+  // Wave affix aura and icon
+  const affix = enemy.affixState.affix
+  if (affix) {
+    drawAffixAura(ctx, enemy, affix, now)
+  }
+
   // Glow — intensifies when attacking or critically low
   ctx.shadowColor = hpRatio < 0.3 ? '#ff2222' : enemy.color
   ctx.shadowBlur = enemy.isAttacking ? 22 : (hpRatio < 0.3 ? 16 : 8)
@@ -1017,7 +1031,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
 
 // ─── Announcements ───────────────────────────────────────────────────────────
 
-function drawWaveAnnouncement(ctx: CanvasRenderingContext2D, wave: number, timer: number, theme: LevelTheme, w: number, h: number): void {
+function drawWaveAnnouncement(ctx: CanvasRenderingContext2D, wave: number, timer: number, theme: LevelTheme, affix: WaveAffix | null, w: number, h: number): void {
   const alpha = Math.min(1, timer / 1.5)
   ctx.fillStyle = `rgba(${hexToRgb(theme.glowColor)}, ${alpha * 0.85})`
   ctx.shadowColor = theme.glowColor
@@ -1026,10 +1040,25 @@ function drawWaveAnnouncement(ctx: CanvasRenderingContext2D, wave: number, timer
   ctx.textAlign = 'center'
   ctx.fillText(`WAVE ${wave}`, w / 2, h / 2 - 40)
 
-  ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.5})`
-  ctx.shadowBlur = 0
-  ctx.font = '16px monospace'
-  ctx.fillText('PREPARE YOURSELF', w / 2, h / 2)
+  // Affix announcement (if present)
+  if (affix) {
+    ctx.shadowBlur = 15
+    ctx.shadowColor = affix.color
+    ctx.fillStyle = affix.color
+    ctx.font = 'bold 22px monospace'
+    ctx.fillText(affix.name.toUpperCase(), w / 2, h / 2)
+
+    ctx.shadowBlur = 0
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.5})`
+    ctx.font = '14px monospace'
+    ctx.fillText(affix.description, w / 2, h / 2 + 28)
+  } else {
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.5})`
+    ctx.shadowBlur = 0
+    ctx.font = '16px monospace'
+    ctx.fillText('PREPARE YOURSELF', w / 2, h / 2)
+  }
+
   ctx.textAlign = 'left'
 }
 
@@ -1422,6 +1451,91 @@ function wrapText(text: string, maxChars: number): string[] {
   if (current) lines.push(current)
 
   return lines
+}
+
+// ─── Affix Rendering ─────────────────────────────────────────────────────────
+
+function drawAffixAura(ctx: CanvasRenderingContext2D, enemy: Enemy, affix: WaveAffix, now: number): void {
+  const pulse = Math.sin(now * 0.004) * 0.2 + 0.5
+  const auraSize = enemy.size * (1.6 + pulse * 0.2)
+
+  // Radial gradient aura
+  const gradient = ctx.createRadialGradient(0, 0, enemy.size * 0.3, 0, 0, auraSize)
+  gradient.addColorStop(0, 'transparent')
+  gradient.addColorStop(0.5, affix.color + '15')
+  gradient.addColorStop(0.8, affix.color + '22')
+  gradient.addColorStop(1, 'transparent')
+
+  ctx.fillStyle = gradient
+  ctx.beginPath()
+  ctx.arc(0, 0, auraSize, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Berserker: intensify aura when active
+  if (affix.berserkerThreshold && enemy.affixState.isBerserking) {
+    const ragePulse = Math.sin(now * 0.015) * 0.3 + 0.7
+    ctx.strokeStyle = affix.color + Math.round(ragePulse * 200).toString(16).padStart(2, '0')
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, enemy.size + 4, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // Small icon above enemy
+  drawAffixIcon(ctx, affix, enemy.size)
+}
+
+function drawAffixIcon(ctx: CanvasRenderingContext2D, affix: WaveAffix, enemySize: number): void {
+  const iconY = -enemySize - 18
+
+  // Icon background
+  ctx.fillStyle = affix.color + '44'
+  ctx.strokeStyle = affix.color + '88'
+  ctx.lineWidth = 1
+  roundRect(ctx, -12, iconY - 7, 24, 12, 3)
+  ctx.fill()
+  ctx.stroke()
+
+  // Icon text
+  ctx.font = 'bold 8px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = affix.color
+  ctx.fillText(affix.icon, 0, iconY + 2)
+  ctx.textAlign = 'left'
+}
+
+function drawCurrentAffix(ctx: CanvasRenderingContext2D, affix: WaveAffix, mutatorCount: number, w: number, h: number): void {
+  const padding = 24
+  const yOffset = padding + (mutatorCount > 0 ? 54 : 10)
+
+  // Label
+  ctx.fillStyle = '#ffffff44'
+  ctx.font = '10px monospace'
+  ctx.textAlign = 'left'
+  ctx.fillText('AFFIX', padding, yOffset + 10)
+
+  // Affix card
+  const cardX = padding
+  const cardY = yOffset + 16
+  const cardW = 90
+  const cardH = 26
+
+  ctx.fillStyle = affix.color + '22'
+  ctx.strokeStyle = affix.color + '66'
+  ctx.lineWidth = 1
+  roundRect(ctx, cardX, cardY, cardW, cardH, 4)
+  ctx.fill()
+  ctx.stroke()
+
+  // Icon
+  ctx.font = 'bold 10px monospace'
+  ctx.fillStyle = affix.color
+  ctx.fillText(affix.icon, cardX + 8, cardY + 17)
+
+  // Name
+  ctx.font = '11px monospace'
+  ctx.fillStyle = '#ffffffcc'
+  ctx.fillText(affix.name, cardX + 28, cardY + 17)
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────

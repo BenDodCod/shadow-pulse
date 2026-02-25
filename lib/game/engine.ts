@@ -1,5 +1,6 @@
 import { Player, createPlayer, updatePlayer, InputState } from './player'
 import { Enemy, EnemyType, updateEnemy } from './enemy'
+import { distance } from './vec2'
 import { Camera, createCamera, shakeCamera, updateCamera } from './camera'
 import { ParticleSystem, createParticleSystem, updateParticles, emitHitSparks, emitPulseWave, emitDeathExplosion, emitAmbientParticle } from './particles'
 import { processPlayerAttacks, processEnemyAttacks, HitEffect } from './combat'
@@ -17,6 +18,7 @@ import {
   checkContractCompletion,
   finalizeContract,
 } from './contracts'
+import { WaveAffix, selectAffixForWave } from './affixes'
 
 export interface GameState {
   player: Player
@@ -27,6 +29,7 @@ export interface GameState {
   wave: number
   waveTimer: number
   waveActive: boolean
+  currentAffix: WaveAffix | null
   hitFreezeTimer: number
   score: number
   highScore: number
@@ -66,6 +69,7 @@ export function createGameState(): GameState {
     wave: 0,
     waveTimer: 2.0,
     waveActive: false,
+    currentAffix: null,
     hitFreezeTimer: 0,
     score: 0,
     highScore: parseInt(typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_hs') || '0' : '0'),
@@ -260,6 +264,25 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   for (const enemy of state.enemies) {
     if (!enemy.isAlive && enemy.hp <= 0) {
       emitDeathExplosion(state.particles, enemy.pos, enemy.color)
+
+      // Volatile affix - explode on death
+      const affix = enemy.affixState.affix
+      if (affix?.explodesOnDeath && state.player.isAlive) {
+        const dist = distance(enemy.pos, state.player.pos)
+        const explosionRadius = affix.explosionRadius ?? 60
+        if (dist <= explosionRadius + S.PLAYER_SIZE) {
+          // Deal explosion damage to player if not protected
+          if (state.player.iframes <= 0 && !state.player.isDashing) {
+            state.player.hp -= affix.explosionDamage ?? 15
+            state.player.iframes = S.PLAYER_IFRAMES * 0.5
+            state.player.flashTimer = 0.1
+            shakeCamera(state.camera, 8, 0.15)
+          }
+        }
+        // Always emit explosion visual
+        emitHitSparks(state.particles, enemy.pos, affix.color, 16)
+      }
+
       enemy.hp = -999 // prevent re-triggering
     }
   }
@@ -285,7 +308,11 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       }
 
       const { arenaRadius, difficultyMult } = state.levelTheme
-      state.enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult)
+
+      // Select affix for this wave
+      state.currentAffix = selectAffixForWave(state.wave)
+
+      state.enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix)
       state.waveActive = true
       state.waveTimer = 2.5
 
@@ -395,6 +422,8 @@ export function renderGame(state: GameState, ctx: CanvasRenderingContext2D): voi
     state.activeMutators,
     // Contract system
     state.contractState,
+    // Affix system
+    state.currentAffix,
     // Last Stand system
     state.lastStandActive,
     state.lastStandTimer,

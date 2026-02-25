@@ -1,4 +1,5 @@
 import { Enemy, createEnemy, EnemyType } from './enemy'
+import { WaveAffix } from './affixes'
 
 export interface WaveConfig {
   enemies: { type: EnemyType; count: number }[]
@@ -59,7 +60,7 @@ export function getWaveConfig(wave: number): WaveConfig {
   }
 }
 
-export function spawnWaveEnemies(wave: number, arenaRadius: number, centerX: number, centerY: number, difficultyMult = 1.0): Enemy[] {
+export function spawnWaveEnemies(wave: number, arenaRadius: number, centerX: number, centerY: number, difficultyMult = 1.0, affix: WaveAffix | null = null): Enemy[] {
   const config = getWaveConfig(wave)
   const enemies: Enemy[] = []
 
@@ -70,7 +71,7 @@ export function spawnWaveEnemies(wave: number, arenaRadius: number, centerX: num
       const radius = arenaRadius * 0.7 + Math.random() * arenaRadius * 0.25
       const x = centerX + Math.cos(angle) * radius
       const y = centerY + Math.sin(angle) * radius
-      enemies.push(createEnemy(group.type, x, y, difficultyMult))
+      enemies.push(createEnemy(group.type, x, y, difficultyMult, affix))
     }
   }
 

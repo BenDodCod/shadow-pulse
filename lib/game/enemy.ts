@@ -1,6 +1,7 @@
 import { Vec2, vec2, sub, add, scale, normalize, distance, length, fromAngle, angleBetween } from './vec2'
 import * as S from './settings'
 import type { Player } from './player'
+import { WaveAffix, EnemyAffixState, createEnemyAffixState } from './affixes'
 
 export type EnemyType = 'normal' | 'sniper' | 'heavy' | 'fast'
 
@@ -34,11 +35,14 @@ export interface Enemy {
   shockwaveActive: boolean
   shockwaveTimer: number
   shockwaveRange: number
+  // Affix system
+  affixState: EnemyAffixState
+  baseDamage: number // Original damage before affix modifiers
 }
 
 let nextId = 0
 
-export function createEnemy(type: EnemyType, x: number, y: number, difficultyMult = 1.0): Enemy {
+export function createEnemy(type: EnemyType, x: number, y: number, difficultyMult = 1.0, affix: WaveAffix | null = null): Enemy {
   const configs: Record<EnemyType, typeof S.NORMAL_ENEMY & { preferredDistance?: number; dodgeChance?: number; shockwaveRange?: number }> = {
     normal: S.NORMAL_ENEMY,
     sniper: S.SNIPER_ENEMY,
@@ -51,6 +55,15 @@ export function createEnemy(type: EnemyType, x: number, y: number, difficultyMul
   const scaledSpeed = cfg.speed * Math.sqrt(difficultyMult) // speed grows slower than hp
   const scaledDamage = Math.round(cfg.damage * (1 + (difficultyMult - 1) * 0.6)) // damage scales gently
 
+  // Apply affix stat modifiers
+  let finalSpeed = scaledSpeed
+  let finalAttackCooldown = cfg.attackCooldown
+
+  if (affix) {
+    if (affix.speedMultiplier) finalSpeed *= affix.speedMultiplier
+    if (affix.attackSpeedMultiplier) finalAttackCooldown /= affix.attackSpeedMultiplier
+  }
+
   return {
     id: nextId++,
     type,
@@ -58,11 +71,11 @@ export function createEnemy(type: EnemyType, x: number, y: number, difficultyMul
     vel: vec2(0, 0),
     hp: scaledHp,
     maxHp: scaledHp,
-    speed: scaledSpeed,
+    speed: finalSpeed,
     damage: scaledDamage,
     attackRange: cfg.attackRange,
-    attackCooldown: cfg.attackCooldown,
-    attackTimer: cfg.attackCooldown * 0.5 + Math.random() * cfg.attackCooldown * 0.5,
+    attackCooldown: finalAttackCooldown,
+    attackTimer: finalAttackCooldown * 0.5 + Math.random() * finalAttackCooldown * 0.5,
     isAttacking: false,
     attackAnimTimer: 0,
     color: cfg.color,
@@ -78,6 +91,8 @@ export function createEnemy(type: EnemyType, x: number, y: number, difficultyMul
     shockwaveActive: false,
     shockwaveTimer: 0,
     shockwaveRange: (cfg as typeof S.HEAVY_ENEMY).shockwaveRange || 0,
+    affixState: createEnemyAffixState(affix),
+    baseDamage: scaledDamage,
   }
 }
 
@@ -85,12 +100,33 @@ export function updateEnemy(enemy: Enemy, player: Player, dt: number, timeScale:
   if (!enemy.isAlive) return
 
   const adt = dt * timeScale
+  const affix = enemy.affixState.affix
 
   // Timers
   if (enemy.flashTimer > 0) enemy.flashTimer -= dt // flash not affected by time scale
   if (enemy.stunTime > 0) {
     enemy.stunTime -= adt
     enemy.vel = vec2(0, 0)
+  }
+
+  // Affix: Regenerating - heal over time
+  if (affix?.regenPerSecond && enemy.hp < enemy.maxHp) {
+    enemy.affixState.regenAccumulator += affix.regenPerSecond * adt
+    if (enemy.affixState.regenAccumulator >= 1) {
+      const heal = Math.floor(enemy.affixState.regenAccumulator)
+      enemy.hp = Math.min(enemy.maxHp, enemy.hp + heal)
+      enemy.affixState.regenAccumulator -= heal
+    }
+  }
+
+  // Affix: Berserker - boost damage when low HP
+  if (affix?.berserkerThreshold) {
+    const hpRatio = enemy.hp / enemy.maxHp
+    const shouldBerserk = hpRatio <= affix.berserkerThreshold
+    if (shouldBerserk && !enemy.affixState.isBerserking) {
+      enemy.affixState.isBerserking = true
+      enemy.damage = Math.round(enemy.baseDamage * (affix.berserkerDamageMultiplier ?? 1.5))
+    }
   }
 
   // Knockback
@@ -235,7 +271,16 @@ function updateFastAI(enemy: Enemy, player: Player, dir: Vec2, dist: number, dt:
 
 export function damageEnemy(enemy: Enemy, damage: number, knockbackDir: Vec2, knockback: number): boolean {
   if (!enemy.isAlive) return false
-  enemy.hp -= damage
+
+  // Apply Armored affix damage reduction
+  let finalDamage = damage
+  const affix = enemy.affixState.affix
+  if (affix?.damageReduction) {
+    finalDamage = Math.round(damage * (1 - affix.damageReduction))
+    finalDamage = Math.max(1, finalDamage) // Always deal at least 1 damage
+  }
+
+  enemy.hp -= finalDamage
   enemy.flashTimer = 0.08
   enemy.knockbackVel = scale(knockbackDir, knockback)
   enemy.knockbackTime = 0.12
