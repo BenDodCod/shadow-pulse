@@ -5,7 +5,7 @@ import { Camera, createCamera, shakeCamera, updateCamera } from './camera'
 import { ParticleSystem, createParticleSystem, updateParticles, emitHitSparks, emitPulseWave, emitDeathExplosion, emitAmbientParticle } from './particles'
 import { processPlayerAttacks, processEnemyAttacks, HitEffect } from './combat'
 import { spawnWaveEnemies } from './waves'
-import { render } from './renderer'
+import { render, DailyEntry } from './renderer'
 import { LevelTheme, Obstacle, getLevelTheme, getLevelNumber, isLevelTransition, generateObstacles } from './levels'
 import * as S from './settings'
 import { setArenaRadius } from './settings'
@@ -19,6 +19,7 @@ import {
   finalizeContract,
 } from './contracts'
 import { WaveAffix, selectAffixForWave } from './affixes'
+import { setRng, resetToMathRandom, getDailySeed, createSeededRng } from './seeded-rng'
 
 export interface GameState {
   player: Player
@@ -56,9 +57,19 @@ export interface GameState {
   lastStandTimer: number
   // Death recap (damage tracking by enemy type)
   damageByEnemyType: Record<EnemyType, number>
+  // Daily Challenge
+  isDailyChallenge: boolean
+  challengeDate: string
 }
 
-export function createGameState(): GameState {
+export function createGameState(isDailyChallenge = false): GameState {
+  const challengeDate = new Date().toISOString().slice(0, 10)
+  if (isDailyChallenge) {
+    setRng(createSeededRng(getDailySeed(challengeDate)))
+  } else {
+    resetToMathRandom()
+  }
+
   const startTheme = getLevelTheme(1)
   return {
     player: createPlayer(),
@@ -95,6 +106,9 @@ export function createGameState(): GameState {
     lastStandTimer: 0,
     // Death recap
     damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
+    // Daily Challenge
+    isDailyChallenge,
+    challengeDate,
   }
 }
 
@@ -399,7 +413,11 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   }
 }
 
-export function renderGame(state: GameState, ctx: CanvasRenderingContext2D): void {
+export function renderGame(
+  state: GameState,
+  ctx: CanvasRenderingContext2D,
+  dailyLeaderboard?: DailyEntry[],
+): void {
   render(
     ctx,
     state.player,
@@ -430,12 +448,15 @@ export function renderGame(state: GameState, ctx: CanvasRenderingContext2D): voi
     state.lastStandUsed,
     // Death recap
     state.damageByEnemyType,
+    // Daily Challenge
+    state.isDailyChallenge,
+    dailyLeaderboard,
   )
 }
 
 export function resetGame(state: GameState): GameState {
   const hs = state.highScore
-  const newState = createGameState()
+  const newState = createGameState(state.isDailyChallenge)
   newState.highScore = hs
   return newState
 }

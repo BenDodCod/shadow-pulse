@@ -1,4 +1,5 @@
 // Wave Affix system - enemy modifiers applied per wave
+import { rng } from './seeded-rng'
 
 export type AffixId = 'swift' | 'frenzied' | 'armored' | 'regenerating' | 'volatile' | 'berserker'
 export type AffixTier = 'mild' | 'medium' | 'strong'
@@ -141,7 +142,7 @@ export function selectAffixForWave(wave: number): WaveAffix | null {
   }
 
   if (weighted.length === 0) return null
-  return weighted[Math.floor(Math.random() * weighted.length)]
+  return weighted[Math.floor(rng() * weighted.length)]
 }
 
 /**

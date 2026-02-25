@@ -53,6 +53,39 @@ export type Database = {
           },
         ]
       }
+      daily_challenge_scores: {
+        Row: {
+          id: string
+          challenge_date: string
+          player_id: string
+          player_name: string
+          score: number
+          wave_reached: number
+          seed: string
+          submitted_at: string | null
+        }
+        Insert: {
+          id?: string
+          challenge_date: string
+          player_id: string
+          player_name: string
+          score: number
+          wave_reached: number
+          seed: string
+          submitted_at?: string | null
+        }
+        Update: {
+          id?: string
+          challenge_date?: string
+          player_id?: string
+          player_name?: string
+          score?: number
+          wave_reached?: number
+          seed?: string
+          submitted_at?: string | null
+        }
+        Relationships: []
+      }
       leaderboard: {
         Row: {
           id: string

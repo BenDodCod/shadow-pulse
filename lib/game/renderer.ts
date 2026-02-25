@@ -9,6 +9,15 @@ import { Mutator } from './mutators'
 import { ContractState, getContractProgressText, getDifficultyColor } from './contracts'
 import { WaveAffix } from './affixes'
 
+/** Leaderboard entry passed from the daily challenge system */
+export interface DailyEntry {
+  rank: number
+  player_name: string
+  score: number
+  wave_reached: number
+  is_you: boolean
+}
+
 export function render(
   ctx: CanvasRenderingContext2D,
   player: Player,
@@ -39,6 +48,9 @@ export function render(
   lastStandUsed: boolean,
   // Death recap
   damageByEnemyType: Record<EnemyType, number>,
+  // Daily Challenge
+  isDailyChallenge?: boolean,
+  dailyLeaderboard?: DailyEntry[],
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -77,7 +89,7 @@ export function render(
   }
 
   // HUD
-  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h, lastStandUsed)
+  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h, lastStandUsed, isDailyChallenge)
 
   // Active mutators HUD
   if (activeMutators.length > 0) {
@@ -112,7 +124,7 @@ export function render(
 
   // Game Over
   if (gameOver) {
-    drawGameOver(ctx, score, highScore, level, damageByEnemyType, w, h)
+    drawGameOver(ctx, score, highScore, level, damageByEnemyType, w, h, isDailyChallenge, dailyLeaderboard)
   }
 }
 
@@ -894,7 +906,7 @@ function drawCracks(ctx: CanvasRenderingContext2D, size: number, hpRatio: number
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 
-function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number, lastStandUsed: boolean): void {
+function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number, lastStandUsed: boolean, isDailyChallenge?: boolean): void {
   const padding = 24
   const barWidth = 220
   const barHeight = 12
@@ -1027,6 +1039,27 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   ctx.textAlign = 'center'
   ctx.fillText('WASD Move | SPACE Dash | J Light | K Heavy | L Pulse | ; Time', w / 2, h - 4)
   ctx.textAlign = 'left'
+
+  // Daily Challenge badge (top-left)
+  if (isDailyChallenge) {
+    const badgeX = 12
+    const badgeY = 12
+    ctx.fillStyle = 'rgba(255, 200, 0, 0.15)'
+    roundRect(ctx, badgeX, badgeY, 110, 22, 4)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255, 200, 0, 0.5)'
+    ctx.lineWidth = 1
+    roundRect(ctx, badgeX, badgeY, 110, 22, 4)
+    ctx.stroke()
+    ctx.fillStyle = '#ffc800'
+    ctx.shadowColor = '#ffc800'
+    ctx.shadowBlur = 6
+    ctx.font = 'bold 11px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('◆ DAILY CHALLENGE', badgeX + 55, badgeY + 15)
+    ctx.textAlign = 'left'
+    ctx.shadowBlur = 0
+  }
 }
 
 // ─── Announcements ───────────────────────────────────────────────────────────
@@ -1133,7 +1166,9 @@ function drawGameOver(
   level: number,
   damageByEnemyType: Record<EnemyType, number>,
   w: number,
-  h: number
+  h: number,
+  isDailyChallenge?: boolean,
+  dailyLeaderboard?: DailyEntry[],
 ): void {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
   ctx.fillRect(0, 0, w, h)
@@ -1189,6 +1224,46 @@ function drawGameOver(
   ctx.font = '14px monospace'
   ctx.fillText('Press R to restart', w / 2, h / 2 + 145)
   ctx.textAlign = 'left'
+
+  // Daily Challenge leaderboard
+  if (isDailyChallenge && dailyLeaderboard && dailyLeaderboard.length > 0) {
+    const lbX = w / 2
+    let lbY = h / 2 + 175
+
+    // Header
+    ctx.fillStyle = '#ffc800'
+    ctx.shadowColor = '#ffc800'
+    ctx.shadowBlur = 8
+    ctx.font = 'bold 13px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('◆ TODAY\'S LEADERBOARD', lbX, lbY)
+    ctx.shadowBlur = 0
+    lbY += 20
+
+    for (const entry of dailyLeaderboard) {
+      const isYou = entry.is_you
+      ctx.fillStyle = isYou ? '#ffc800' : '#ffffff88'
+      if (isYou) {
+        ctx.shadowColor = '#ffc800'
+        ctx.shadowBlur = 6
+      }
+      ctx.font = isYou ? 'bold 12px monospace' : '12px monospace'
+      const nameDisplay = entry.player_name.length > 14 ? entry.player_name.slice(0, 13) + '…' : entry.player_name
+      const line = `#${entry.rank}  ${nameDisplay.padEnd(14)}  ${String(entry.score).padStart(7)}  W${entry.wave_reached}`
+      ctx.fillText(line, lbX, lbY)
+      ctx.shadowBlur = 0
+      lbY += 16
+    }
+
+    ctx.textAlign = 'left'
+  } else if (isDailyChallenge) {
+    // Loading or no Supabase
+    ctx.fillStyle = '#ffffff33'
+    ctx.font = '12px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('Loading leaderboard…', w / 2, h / 2 + 185)
+    ctx.textAlign = 'left'
+  }
 }
 
 // Helper to find which enemy type dealt the most damage

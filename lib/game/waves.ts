@@ -1,5 +1,6 @@
 import { Enemy, createEnemy, EnemyType } from './enemy'
 import { WaveAffix } from './affixes'
+import { rng } from './seeded-rng'
 
 export interface WaveConfig {
   enemies: { type: EnemyType; count: number }[]
@@ -67,8 +68,8 @@ export function spawnWaveEnemies(wave: number, arenaRadius: number, centerX: num
   for (const group of config.enemies) {
     for (let i = 0; i < group.count; i++) {
       // Spawn around the arena edge
-      const angle = Math.random() * Math.PI * 2
-      const radius = arenaRadius * 0.7 + Math.random() * arenaRadius * 0.25
+      const angle = rng() * Math.PI * 2
+      const radius = arenaRadius * 0.7 + rng() * arenaRadius * 0.25
       const x = centerX + Math.cos(angle) * radius
       const y = centerY + Math.sin(angle) * radius
       enemies.push(createEnemy(group.type, x, y, difficultyMult, affix))

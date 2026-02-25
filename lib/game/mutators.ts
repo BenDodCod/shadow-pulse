@@ -1,4 +1,5 @@
 // Mutator system for post-wave draft selection
+import { rng } from './seeded-rng'
 
 export type MutatorId = string
 
@@ -241,7 +242,7 @@ export function getRandomMutators(
 
   // Shuffle using Fisher-Yates
   for (let i = weighted.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
+    const j = Math.floor(rng() * (i + 1))
     ;[weighted[i], weighted[j]] = [weighted[j], weighted[i]]
   }
 

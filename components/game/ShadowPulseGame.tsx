@@ -4,6 +4,14 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { GameState, createGameState, updateGame, renderGame, resetGame } from '@/lib/game/engine'
 import { InputState } from '@/lib/game/player'
 import { GAME_WIDTH, GAME_HEIGHT } from '@/lib/game/settings'
+import { DailyEntry } from '@/lib/game/renderer'
+import {
+  submitDailyChallengeScore,
+  getDailyLeaderboard,
+  getAllTimeLeaderboard,
+  getOrCreatePlayerId,
+  AllTimeEntry,
+} from '@/lib/supabase/daily-challenge'
 
 export default function ShadowPulseGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -24,9 +32,13 @@ export default function ShadowPulseGame() {
   const animFrameRef = useRef<number>(0)
   const lastTimeRef = useRef<number>(0)
   const [started, setStarted] = useState(false)
+  const [dailyLeaderboard, setDailyLeaderboard] = useState<DailyEntry[]>([])
+  const scoreSubmittedRef = useRef(false)
 
-  const startGame = useCallback(() => {
-    gameStateRef.current = createGameState()
+  const startGame = useCallback((isDailyChallenge = false) => {
+    gameStateRef.current = createGameState(isDailyChallenge)
+    scoreSubmittedRef.current = false
+    setDailyLeaderboard([])
     setStarted(true)
   }, [])
 
@@ -87,7 +99,10 @@ export default function ShadowPulseGame() {
 
       // Restart
       if (key === 'r' && gameStateRef.current?.gameOver) {
+        const wasDaily = gameStateRef.current.isDailyChallenge
         gameStateRef.current = resetGame(gameStateRef.current)
+        scoreSubmittedRef.current = false
+        if (wasDaily) setDailyLeaderboard([])
       }
     }
 
@@ -150,8 +165,25 @@ export default function ShadowPulseGame() {
       inputRef.current.pulseWave = false
       inputRef.current.timeFlicker = false
 
+      // Submit daily score on game over (once)
+      if (state.gameOver && state.isDailyChallenge && !scoreSubmittedRef.current) {
+        scoreSubmittedRef.current = true
+        const playerId = getOrCreatePlayerId()
+        const playerName = localStorage.getItem('shadowpulse_player_name') || 'Anonymous'
+        submitDailyChallengeScore({
+          date: state.challengeDate,
+          playerId,
+          playerName,
+          score: state.score,
+          waveReached: state.wave,
+          seed: state.challengeDate,
+        }).then(() => {
+          getDailyLeaderboard(state.challengeDate, playerId).then(setDailyLeaderboard)
+        })
+      }
+
       // Render
-      renderGame(state, ctx)
+      renderGame(state, ctx, dailyLeaderboard)
 
       animFrameRef.current = requestAnimationFrame(gameLoop)
     }
@@ -161,10 +193,15 @@ export default function ShadowPulseGame() {
     return () => {
       cancelAnimationFrame(animFrameRef.current)
     }
-  }, [started])
+  }, [started, dailyLeaderboard])
 
   if (!started) {
-    return <TitleScreen onStart={startGame} />
+    return (
+      <TitleScreen
+        onStart={() => startGame(false)}
+        onStartDaily={() => startGame(true)}
+      />
+    )
   }
 
   return (
@@ -184,9 +221,32 @@ export default function ShadowPulseGame() {
   )
 }
 
-function TitleScreen({ onStart }: { onStart: () => void }) {
+function TitleScreen({ onStart, onStartDaily }: { onStart: () => void; onStartDaily: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
+  const [showNamePrompt, setShowNamePrompt] = useState(false)
+  const [playerName, setPlayerName] = useState(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('shadowpulse_player_name') || ''
+    return ''
+  })
+  const [allTimeBoard, setAllTimeBoard] = useState<AllTimeEntry[]>([])
+
+  useEffect(() => {
+    const playerId = getOrCreatePlayerId()
+    getAllTimeLeaderboard(playerId, 8).then(setAllTimeBoard)
+  }, [])
+
+  const handleDailyClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowNamePrompt(true)
+  }
+
+  const handleNameSubmit = () => {
+    const name = playerName.trim() || 'Anonymous'
+    localStorage.setItem('shadowpulse_player_name', name)
+    setShowNamePrompt(false)
+    onStartDaily()
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -249,13 +309,8 @@ function TitleScreen({ onStart }: { onStart: () => void }) {
 
   return (
     <div
-      className="relative flex items-center justify-center w-full h-screen cursor-pointer overflow-hidden"
+      className="relative flex items-center justify-center w-full h-screen overflow-hidden"
       style={{ backgroundColor: '#0a0a12' }}
-      onClick={onStart}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onStart() }}
-      aria-label="Start Shadow Pulse game"
     >
       {/* Animated background canvas */}
       <canvas
@@ -266,10 +321,10 @@ function TitleScreen({ onStart }: { onStart: () => void }) {
       />
 
       {/* HTML overlay */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 pointer-events-none select-none px-8">
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 select-none px-8">
 
         {/* Title */}
-        <div className="text-center">
+        <div className="text-center pointer-events-none">
           <h1 style={{ ...mono, color: '#7b2fff', fontSize: '62px', fontWeight: 'bold', textShadow: '0 0 40px #7b2fff, 0 0 80px #7b2fff44', margin: 0, lineHeight: 1.1, letterSpacing: '0.06em' }}>
             SHADOW PULSE
           </h1>
@@ -279,7 +334,7 @@ function TitleScreen({ onStart }: { onStart: () => void }) {
         </div>
 
         {/* Controls grid */}
-        <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
+        <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }} className="pointer-events-none">
 
           {/* Movement card */}
           <div style={{ background: '#0d0d1a', border: '1px solid #7b2fff33', borderRadius: '8px', padding: '14px 20px', minWidth: '160px' }}>
@@ -311,17 +366,174 @@ function TitleScreen({ onStart }: { onStart: () => void }) {
           </div>
         </div>
 
-        {/* Start prompt */}
-        <p style={{ ...mono, color: '#ffffffcc', fontSize: '17px', letterSpacing: '0.15em', animation: 'sp-blink 2s ease-in-out infinite', marginTop: '4px' }}>
-          CLICK TO START
-        </p>
+        {/* Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+          {/* Normal start */}
+          <button
+            onClick={onStart}
+            style={{
+              ...mono,
+              background: 'transparent',
+              border: '1px solid #7b2fff88',
+              borderRadius: '6px',
+              color: '#ffffffcc',
+              fontSize: '17px',
+              letterSpacing: '0.15em',
+              padding: '10px 40px',
+              cursor: 'pointer',
+              animation: 'sp-blink 2s ease-in-out infinite',
+            }}
+          >
+            CLICK TO START
+          </button>
+
+          {/* Daily Challenge button */}
+          <button
+            onClick={handleDailyClick}
+            style={{
+              ...mono,
+              background: 'rgba(255, 200, 0, 0.08)',
+              border: '1px solid rgba(255, 200, 0, 0.5)',
+              borderRadius: '6px',
+              color: '#ffc800',
+              fontSize: '13px',
+              letterSpacing: '0.12em',
+              padding: '7px 24px',
+              cursor: 'pointer',
+              textShadow: '0 0 10px #ffc80066',
+            }}
+          >
+            ◆ DAILY CHALLENGE
+          </button>
+        </div>
 
         {/* Story blurb */}
-        <p style={{ ...mono, color: '#ffffff22', fontSize: '11px', textAlign: 'center', lineHeight: 1.7 }}>
+        <p style={{ ...mono, color: '#ffffff22', fontSize: '11px', textAlign: 'center', lineHeight: 1.7 }} className="pointer-events-none">
           Kael Riven · Ex-Helix operative · Connected to the Pulse<br />
           Survive the corrupted arena. How long can you hold?
         </p>
+
+        {/* All-time leaderboard panel */}
+        {allTimeBoard.length > 0 && (
+          <div style={{
+            background: 'rgba(10, 10, 20, 0.85)',
+            border: '1px solid rgba(255, 200, 0, 0.2)',
+            borderRadius: '8px',
+            padding: '12px 20px',
+            minWidth: '320px',
+            maxWidth: '400px',
+          }} className="pointer-events-none">
+            <p style={{ ...mono, color: '#ffc800', fontSize: '10px', letterSpacing: '0.25em', marginBottom: '8px', textAlign: 'center', textTransform: 'uppercase', textShadow: '0 0 8px #ffc80055' }}>
+              ◆ All-Time Hall of Fame
+            </p>
+            {allTimeBoard.map((entry) => (
+              <div key={entry.rank} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <span style={{ ...mono, color: entry.is_you ? '#ffc800' : '#ffffff44', fontSize: '11px', minWidth: '20px' }}>
+                  #{entry.rank}
+                </span>
+                <span style={{ ...mono, color: entry.is_you ? '#ffc800' : '#ffffff88', fontSize: '11px', flex: 1, marginLeft: '8px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                  {entry.player_name}{entry.is_you ? ' ◀' : ''}
+                </span>
+                <span style={{ ...mono, color: entry.is_you ? '#ffc800' : '#ffffffaa', fontSize: '11px', marginLeft: '8px' }}>
+                  {entry.score.toLocaleString()}
+                </span>
+                <span style={{ ...mono, color: '#ffffff33', fontSize: '10px', marginLeft: '6px' }}>
+                  W{entry.wave_reached}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Name Prompt Modal */}
+      {showNamePrompt && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0,0,0,0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{
+            background: '#0d0d1a',
+            border: '1px solid rgba(255, 200, 0, 0.4)',
+            borderRadius: '10px',
+            padding: '32px 40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+            minWidth: '320px',
+          }}>
+            <p style={{ ...mono, color: '#ffc800', fontSize: '14px', letterSpacing: '0.2em', textShadow: '0 0 10px #ffc80066', margin: 0 }}>
+              ◆ DAILY CHALLENGE
+            </p>
+            <p style={{ ...mono, color: '#ffffff88', fontSize: '12px', textAlign: 'center', margin: 0, lineHeight: 1.6 }}>
+              One shared seed per day.<br />Compete with everyone.
+            </p>
+            <input
+              type="text"
+              placeholder="Enter your name"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleNameSubmit() }}
+              maxLength={20}
+              autoFocus
+              style={{
+                ...mono,
+                background: '#1a1a2e',
+                border: '1px solid #7b2fff55',
+                borderRadius: '6px',
+                color: '#ffffffcc',
+                fontSize: '14px',
+                padding: '8px 14px',
+                outline: 'none',
+                width: '100%',
+                textAlign: 'center',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={handleNameSubmit}
+                style={{
+                  ...mono,
+                  background: 'rgba(255, 200, 0, 0.15)',
+                  border: '1px solid rgba(255, 200, 0, 0.6)',
+                  borderRadius: '6px',
+                  color: '#ffc800',
+                  fontSize: '13px',
+                  padding: '8px 24px',
+                  cursor: 'pointer',
+                  letterSpacing: '0.1em',
+                }}
+              >
+                PLAY
+              </button>
+              <button
+                onClick={() => setShowNamePrompt(false)}
+                style={{
+                  ...mono,
+                  background: 'transparent',
+                  border: '1px solid #ffffff22',
+                  borderRadius: '6px',
+                  color: '#ffffff44',
+                  fontSize: '13px',
+                  padding: '8px 24px',
+                  cursor: 'pointer',
+                }}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

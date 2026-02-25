@@ -1,6 +1,7 @@
 // Wave Contracts system - optional objectives with rewards
 
 import { EnemyType } from './enemy'
+import { rng } from './seeded-rng'
 
 export type ContractId = string
 export type ContractDifficulty = 'easy' | 'medium' | 'hard'
@@ -223,7 +224,7 @@ export function selectContractForWave(
     return eligible[0]
   }
 
-  return weighted[Math.floor(Math.random() * weighted.length)]
+  return weighted[Math.floor(rng() * weighted.length)]
 }
 
 /**
