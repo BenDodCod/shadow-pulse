@@ -4,7 +4,13 @@
       "Bash(Remove-Item -Recurse -Force \"d:\\\\shadow_pulse\\\\.next\" -ErrorAction SilentlyContinue)",
       "Bash(Write-Host \"Cache cleared\")",
       "Read(//c/Users/matanb/AppData/Local/Temp/**)",
-      "mcp__perplexity__perplexity_ask"
+      "mcp__perplexity__perplexity_ask",
+      "Bash(gh auth:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "additionalDirectories": [
       "d:\\shadow_pulse\\.next"
