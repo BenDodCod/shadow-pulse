@@ -16,6 +16,15 @@ import {
 export default function ShadowPulseGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameStateRef = useRef<GameState | null>(null)
+  const [scale, setScale] = useState(1)
+
+  useEffect(() => {
+    const update = () =>
+      setScale(Math.min(window.innerWidth / GAME_WIDTH, window.innerHeight / GAME_HEIGHT))
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
   const inputRef = useRef<InputState>({
     up: false,
     down: false,
@@ -200,19 +209,21 @@ export default function ShadowPulseGame() {
       <TitleScreen
         onStart={() => startGame(false)}
         onStartDaily={() => startGame(true)}
+        scale={scale}
       />
     )
   }
 
   return (
-    <div className="flex items-center justify-center w-full h-screen" style={{ backgroundColor: '#0a0a12' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#0a0a12', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
         width={GAME_WIDTH}
         height={GAME_HEIGHT}
-        className="block max-w-full max-h-full"
         style={{
           imageRendering: 'pixelated',
+          transform: `scale(${scale})`,
+          transformOrigin: 'center',
           border: '1px solid #1a1a2e',
         }}
         tabIndex={0}
@@ -221,7 +232,7 @@ export default function ShadowPulseGame() {
   )
 }
 
-function TitleScreen({ onStart, onStartDaily }: { onStart: () => void; onStartDaily: () => void }) {
+function TitleScreen({ onStart, onStartDaily, scale }: { onStart: () => void; onStartDaily: () => void; scale: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
   const [showNamePrompt, setShowNamePrompt] = useState(false)
@@ -317,7 +328,8 @@ function TitleScreen({ onStart, onStartDaily }: { onStart: () => void; onStartDa
         ref={canvasRef}
         width={GAME_WIDTH}
         height={GAME_HEIGHT}
-        className="absolute block max-w-full max-h-full pointer-events-none"
+        className="absolute pointer-events-none"
+        style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}
       />
 
       {/* HTML overlay */}

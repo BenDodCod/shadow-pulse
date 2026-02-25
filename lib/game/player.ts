@@ -42,6 +42,9 @@ export interface Player {
   // Visual
   flashTimer: number
   trailPositions: Vec2[]
+
+  // Cooldown tracking (for HUD display)
+  attackMaxCooldown: number
 }
 
 export function createPlayer(): Player {
@@ -73,6 +76,7 @@ export function createPlayer(): Player {
     isAlive: true,
     flashTimer: 0,
     trailPositions: [],
+    attackMaxCooldown: 0,
   }
 }
 
@@ -166,6 +170,7 @@ export function updatePlayer(player: Player, input: InputState, dt: number, modi
       player.attacking = 'heavy'
       player.attackTime = S.HEAVY_DURATION
       player.attackCooldown = effectiveHeavyCooldown
+      player.attackMaxCooldown = effectiveHeavyCooldown
       player.comboCount = 0
       player.comboTimer = 0
     }
@@ -201,6 +206,7 @@ export function updatePlayer(player: Player, input: InputState, dt: number, modi
     player.attacking = 'light'
     player.attackTime = S.LIGHT_DURATION
     player.attackCooldown = effectiveLightCooldown
+    player.attackMaxCooldown = effectiveLightCooldown
     player.comboCount = Math.min(player.comboCount + 1, 3)
     player.comboTimer = 0.6
   }
@@ -213,6 +219,7 @@ export function updatePlayer(player: Player, input: InputState, dt: number, modi
     player.attacking = 'pulse_wave'
     player.attackTime = S.PULSE_WAVE_DURATION
     player.attackCooldown = 0.5
+    player.attackMaxCooldown = 0.5
   }
 
   // Time Flicker

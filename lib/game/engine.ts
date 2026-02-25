@@ -60,6 +60,8 @@ export interface GameState {
   // Daily Challenge
   isDailyChallenge: boolean
   challengeDate: string
+  // Mutator selection feedback overlay
+  mutatorFeedback: { name: string; description: string; color: string; timer: number } | null
 }
 
 export function createGameState(isDailyChallenge = false): GameState {
@@ -109,6 +111,7 @@ export function createGameState(isDailyChallenge = false): GameState {
     // Daily Challenge
     isDailyChallenge,
     challengeDate,
+    mutatorFeedback: null,
   }
 }
 
@@ -141,6 +144,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         state.activeMutators.push(chosen)
         state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
         applyMutatorStats(state.player, state.combinedModifiers)
+        state.mutatorFeedback = { name: chosen.name, description: chosen.description, color: chosen.color, timer: 2.5 }
       }
       state.mutatorSelectionActive = false
       state.mutatorChoices = []
@@ -158,6 +162,12 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   // Level-up announcement timer
   if (state.levelUpTimer > 0) {
     state.levelUpTimer -= dt
+  }
+
+  // Mutator feedback fade timer
+  if (state.mutatorFeedback) {
+    state.mutatorFeedback.timer -= dt
+    if (state.mutatorFeedback.timer <= 0) state.mutatorFeedback = null
   }
 
   // Last Stand slow-mo timer
@@ -451,6 +461,8 @@ export function renderGame(
     // Daily Challenge
     state.isDailyChallenge,
     dailyLeaderboard,
+    // Mutator feedback
+    state.mutatorFeedback,
   )
 }
 

@@ -14,7 +14,8 @@
       "mcp__vercel__list_teams",
       "mcp__supabase__list_projects",
       "mcp__vercel__list_projects",
-      "mcp__supabase__list_tables"
+      "mcp__supabase__list_tables",
+      "Bash(npx tsc:*)"
     ],
     "additionalDirectories": [
       "d:\\shadow_pulse\\.next"

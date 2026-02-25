@@ -51,6 +51,8 @@ export function render(
   // Daily Challenge
   isDailyChallenge?: boolean,
   dailyLeaderboard?: DailyEntry[],
+  // Mutator feedback overlay
+  mutatorFeedback?: { name: string; description: string; color: string; timer: number } | null,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -120,6 +122,11 @@ export function render(
   // Level-up announcement
   if (levelUpTimer > 0) {
     drawLevelAnnouncement(ctx, level, levelUpName, levelUpTimer, levelTheme, w, h)
+  }
+
+  // Mutator feedback overlay (fades in over gameplay after picking)
+  if (mutatorFeedback && mutatorFeedback.timer > 0) {
+    drawMutatorFeedback(ctx, mutatorFeedback, w, h)
   }
 
   // Game Over
@@ -911,9 +918,15 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   const barWidth = 220
   const barHeight = 12
 
-  // HP Bar
-  const hpX = padding
-  const hpY = h - padding - barHeight * 2 - 8
+  // Layout computed bottom-up to guarantee icon row fits inside canvas:
+  // h-8: canvas bottom margin
+  // h-38: icon row top (30px tall)
+  // h-46: 8px gap
+  // h-58: energy bar top (12px)
+  // h-64: 6px gap
+  // h-76: HP bar top (12px)
+  const hpX = 24
+  const hpY = h - 76
 
   ctx.fillStyle = '#ffffff88'
   ctx.font = '11px monospace'
@@ -965,7 +978,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   }
 
   // Energy Bar
-  const enY = hpY + barHeight + 6
+  const enY = h - 58
 
   ctx.fillStyle = '#ffffff88'
   ctx.font = '11px monospace'
@@ -981,6 +994,9 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   roundRect(ctx, hpX, enY, barWidth * (player.energy / player.maxEnergy), barHeight, 3)
   ctx.fill()
   ctx.shadowBlur = 0
+
+  // Ability cooldown icons (below energy bar)
+  drawAbilityCooldowns(ctx, player, theme, hpX, h - 38)
 
   // Time Flicker indicator
   if (player.timeFlickerActive) {
@@ -1060,6 +1076,116 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
     ctx.textAlign = 'left'
     ctx.shadowBlur = 0
   }
+}
+
+// ─── Ability Cooldown Icons ───────────────────────────────────────────────────
+
+function drawAbilityCooldowns(ctx: CanvasRenderingContext2D, player: Player, theme: LevelTheme, x: number, y: number): void {
+  const iconSize = 30
+  const gap = 5
+  const abilities = [
+    { label: 'LT', key: 'J', color: '#cc88ff' },
+    { label: 'HV', key: 'K', color: '#ffaa22' },
+    { label: 'PW', key: 'L', color: '#7b2fff' },
+    { label: 'TF', key: ';', color: '#00ccff' },
+    { label: 'DS', key: '↑', color: '#22ffaa' },
+  ] as const
+
+  // Compute per-ability cooldown ratio (0 = ready, 1 = full cooldown)
+  const pulseCost = S.PULSE_WAVE_COST
+  const flickerCost = S.TIME_FLICKER_COST
+  const cooldownRatio = player.attackMaxCooldown > 0 ? Math.max(0, player.attackCooldown / player.attackMaxCooldown) : 0
+  const dashRatio = S.DASH_COOLDOWN > 0 ? Math.max(0, player.dashCooldown / S.DASH_COOLDOWN) : 0
+  const flickerRatio = player.timeFlickerActive ? (player.timeFlickerTimer / S.TIME_FLICKER_DURATION) : 0
+
+  const ratios = [
+    cooldownRatio,                                              // LT
+    player.heavyCharging ? (player.heavyChargeTime / S.HEAVY_CHARGE_TIME) : cooldownRatio, // HV shows charge progress
+    player.energy < pulseCost ? -1 : cooldownRatio,           // PW: -1 = low energy
+    player.energy < flickerCost ? -1 : flickerRatio,          // TF: -1 = low energy
+    dashRatio,                                                  // DS
+  ]
+
+  for (let i = 0; i < abilities.length; i++) {
+    const ab = abilities[i]
+    const ix = x + i * (iconSize + gap)
+    const iy = y
+    const ratio = ratios[i]
+    const lowEnergy = ratio === -1
+    const coolRatio = lowEnergy ? 0 : ratio
+
+    // Background
+    ctx.fillStyle = '#111122'
+    roundRect(ctx, ix, iy, iconSize, iconSize, 4)
+    ctx.fill()
+
+    // Cooldown fill (from bottom up)
+    if (coolRatio < 1) {
+      const fillH = iconSize * (1 - coolRatio)
+      ctx.save()
+      ctx.beginPath()
+      // Clip to icon area
+      roundRect(ctx, ix, iy, iconSize, iconSize, 4)
+      ctx.clip()
+      ctx.fillStyle = lowEnergy ? '#444455' : ab.color + '55'
+      ctx.shadowColor = lowEnergy ? 'transparent' : ab.color
+      ctx.shadowBlur = coolRatio < 0.05 ? 8 : 0
+      ctx.fillRect(ix, iy + iconSize - fillH, iconSize, fillH)
+      ctx.shadowBlur = 0
+      ctx.restore()
+    }
+
+    // Border
+    ctx.strokeStyle = lowEnergy ? '#333355' : (coolRatio < 0.05 ? ab.color : '#333355')
+    ctx.lineWidth = coolRatio < 0.05 && !lowEnergy ? 1.5 : 1
+    if (coolRatio < 0.05 && !lowEnergy) {
+      ctx.shadowColor = ab.color
+      ctx.shadowBlur = 6
+    }
+    roundRect(ctx, ix, iy, iconSize, iconSize, 4)
+    ctx.stroke()
+    ctx.shadowBlur = 0
+
+    // Ability label
+    ctx.fillStyle = lowEnergy ? '#555566' : (coolRatio > 0.8 ? '#555566' : '#ffffffcc')
+    ctx.font = 'bold 9px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(ab.label, ix + iconSize / 2, iy + iconSize / 2 - 1)
+
+    // Key hint below label
+    ctx.fillStyle = lowEnergy ? '#444455' : '#ffffff44'
+    ctx.font = '8px monospace'
+    ctx.fillText(ab.key, ix + iconSize / 2, iy + iconSize / 2 + 9)
+    ctx.textAlign = 'left'
+  }
+}
+
+// ─── Mutator Feedback Overlay ─────────────────────────────────────────────────
+
+function drawMutatorFeedback(ctx: CanvasRenderingContext2D, feedback: { name: string; description: string; color: string; timer: number }, w: number, h: number): void {
+  const alpha = Math.min(1, feedback.timer / 0.4) * Math.min(1, feedback.timer)
+  if (alpha <= 0) return
+
+  ctx.save()
+  ctx.globalAlpha = alpha
+
+  // Drop shadow behind text for readability
+  const cy = h * 0.62
+
+  ctx.font = 'bold 22px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = feedback.color
+  ctx.shadowColor = feedback.color
+  ctx.shadowBlur = 20
+  ctx.fillText(feedback.name.toUpperCase(), w / 2, cy)
+  ctx.shadowBlur = 0
+
+  ctx.font = '13px monospace'
+  ctx.fillStyle = '#ffffffcc'
+  ctx.fillText(feedback.description, w / 2, cy + 22)
+
+  ctx.textAlign = 'left'
+  ctx.restore()
 }
 
 // ─── Announcements ───────────────────────────────────────────────────────────
