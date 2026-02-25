@@ -51,13 +51,15 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 | `affixes.ts` | Per-wave enemy modifiers — 6 affix types (Swift/Frenzied/Armored/Regenerating/Volatile/Berserker) across 3 tiers |
 | `contracts.ts` | Optional wave objectives — 9 contracts (easy/medium/hard) with score/HP/energy rewards |
 | `scores.ts` | Score persistence — localStorage + optional Supabase leaderboard, graceful fallback |
+| `seeded-rng.ts` | Mulberry32 PRNG — module-level `rng()` replaces `Math.random()` in waves/affixes/mutators/contracts; swapped for seeded fn in Daily Challenge mode |
 
 ## Supabase Integration (`lib/supabase/`)
 
 | File | Purpose |
 |------|---------|
 | `client.ts` | Singleton Supabase client; checks `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
-| `types.ts` | Auto-generated database schema types (profiles, game_sessions, leaderboard tables) |
+| `types.ts` | Database schema types (profiles, game_sessions, leaderboard, daily_challenge_scores) |
+| `daily-challenge.ts` | Daily Challenge Supabase ops — submit/upsert score, fetch today's leaderboard, all-time Hall of Fame, anonymous player ID |
 
 ## Key Patterns
 
@@ -81,6 +83,8 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 
 **Wave Contracts** — Optional objective offered before each wave (e.g. "take no damage", "kill sniper first"). Evaluated at wave end; rewards score bonus, HP restore, or energy restore.
 
+**Daily Seed Challenge** — One fixed run seed per day (hash of `YYYY-MM-DD`). All players get identical enemy spawns, affixes, mutators, and contracts. `createGameState(true)` swaps `rng()` to a mulberry32 seeded generator. Scores stored in Supabase `daily_challenge_scores` table (anonymous player ID via localStorage UUID, upsert best score only). Game over screen shows today's top-10; title screen shows all-time Hall of Fame.
+
 ## Controls
 
 - **WASD/Arrows**: Move
@@ -98,3 +102,5 @@ The game component (`components/game/ShadowPulseGame.tsx`) manages the canvas, i
 - Scores persist to localStorage with optional Supabase cloud leaderboard (`lib/game/scores.ts`); game works offline without Supabase configured
 - Game is SSR-disabled (dynamic import in `app/page.tsx`)
 - Vercel deployment config in `vercel.json` (fra1 region)
+- `rng()` from `seeded-rng.ts` must be used instead of `Math.random()` in all game randomness — enables deterministic Daily Challenge replays
+- Daily Challenge identity: anonymous UUID stored in `shadowpulse_player_id` (localStorage), name in `shadowpulse_player_name`
