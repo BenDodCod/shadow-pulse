@@ -131,11 +131,13 @@ export default function ShadowPulseGame() {
         input.consumableActivate = true
       }
 
-      // Wave event Y/N
-      if (key === 'y' && !wasPressed) {
+      // Wave event Y/N — only fire when wave event is actually pending and mutator
+      // selection is not active (prevents one-shot consumption during mutator screen)
+      const waveEvtState = gameStateRef.current
+      if (key === 'y' && !wasPressed && waveEvtState?.pendingWaveEvent && !waveEvtState?.mutatorSelectionActive) {
         input.acceptWaveEvent = true
       }
-      if (key === 'n' && !wasPressed) {
+      if (key === 'n' && !wasPressed && waveEvtState?.pendingWaveEvent && !waveEvtState?.mutatorSelectionActive) {
         input.rejectWaveEvent = true
       }
 
