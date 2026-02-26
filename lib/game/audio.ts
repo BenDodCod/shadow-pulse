@@ -121,7 +121,7 @@ class AudioEngine {
     this.masterGain.connect(ctx.destination)
 
     this.sfxGain = ctx.createGain()
-    this.sfxGain.gain.value = 0.75
+    this.sfxGain.gain.value = 0.55
     this.sfxGain.connect(this.masterGain)
 
     this.musicGain = ctx.createGain()
@@ -751,6 +751,208 @@ class AudioEngine {
         break
       }
     }
+  }
+
+  // ─── New SFX ───────────────────────────────────────────────────────────────
+
+  playDash(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    // Short sawtooth swoosh: 800→200 Hz in 80ms
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(800, t)
+    osc.frequency.exponentialRampToValueAtTime(200, t + 0.08)
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.value = 500
+    filter.Q.value = 1.5
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.18, t)
+    env.gain.exponentialRampToValueAtTime(0.001, t + 0.1)
+    osc.connect(filter)
+    filter.connect(env)
+    env.connect(this.sfxGain)
+    osc.start(t)
+    osc.stop(t + 0.12)
+  }
+
+  playWaveStart(_wave: number): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    // 3-note ascending arpeggio: C4 → E4 → G4, 100ms each, bright sine
+    const freqs = [NOTES.C4, 329.63, NOTES.G4] // C4, E4, G4
+    freqs.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const env = ctx.createGain()
+      const start = t + i * 0.1
+      env.gain.setValueAtTime(0, start)
+      env.gain.linearRampToValueAtTime(0.2, start + 0.02)
+      env.gain.exponentialRampToValueAtTime(0.001, start + 0.12)
+      osc.connect(env)
+      env.connect(this.sfxGain!)
+      osc.start(start)
+      osc.stop(start + 0.14)
+    })
+  }
+
+  playWaveEnd(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    // 2-note descent (G4 → C4) + soft resolution chord
+    const freqs = [NOTES.G4, NOTES.C4]
+    freqs.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const env = ctx.createGain()
+      const start = t + i * 0.14
+      env.gain.setValueAtTime(0, start)
+      env.gain.linearRampToValueAtTime(0.18, start + 0.02)
+      env.gain.exponentialRampToValueAtTime(0.001, start + 0.22)
+      osc.connect(env)
+      env.connect(this.sfxGain!)
+      osc.start(start)
+      osc.stop(start + 0.25)
+    })
+    // Soft pad chord underneath
+    ;[NOTES.C4, NOTES.Eb4, NOTES.G4].forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      osc.type = 'triangle'
+      osc.frequency.value = freq
+      const env = ctx.createGain()
+      env.gain.setValueAtTime(0, t + 0.1)
+      env.gain.linearRampToValueAtTime(0.07 - i * 0.01, t + 0.2)
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.7)
+      osc.connect(env)
+      env.connect(this.sfxGain!)
+      osc.start(t + 0.1)
+      osc.stop(t + 0.75)
+    })
+  }
+
+  playMutatorSelect(rarity: 'common' | 'rare' | 'epic'): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    if (rarity === 'common') {
+      // Single bright chime at C5
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = NOTES.C5
+      const env = ctx.createGain()
+      env.gain.setValueAtTime(0.22, t)
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.25)
+      osc.connect(env)
+      env.connect(this.sfxGain)
+      osc.start(t)
+      osc.stop(t + 0.28)
+    } else if (rarity === 'rare') {
+      // 2-note rise: G4 → C5
+      ;[NOTES.G4, NOTES.C5].forEach((freq, i) => {
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const env = ctx.createGain()
+        const start = t + i * 0.1
+        env.gain.setValueAtTime(0.2, start)
+        env.gain.exponentialRampToValueAtTime(0.001, start + 0.2)
+        osc.connect(env)
+        env.connect(this.sfxGain!)
+        osc.start(start)
+        osc.stop(start + 0.22)
+      })
+    } else {
+      // Epic: 3-note fanfare C4 → G4 → C5 with harmonics
+      ;[NOTES.C4, NOTES.G4, NOTES.C5].forEach((freq, i) => {
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const env = ctx.createGain()
+        const start = t + i * 0.1
+        env.gain.setValueAtTime(0.22, start)
+        env.gain.exponentialRampToValueAtTime(0.001, start + 0.3)
+        osc.connect(env)
+        env.connect(this.sfxGain!)
+        osc.start(start)
+        osc.stop(start + 0.35)
+        // Harmonic overtone
+        const h = ctx.createOscillator()
+        h.type = 'sine'
+        h.frequency.value = freq * 2
+        const hEnv = ctx.createGain()
+        hEnv.gain.setValueAtTime(0.08, start)
+        hEnv.gain.exponentialRampToValueAtTime(0.001, start + 0.2)
+        h.connect(hEnv)
+        hEnv.connect(this.sfxGain!)
+        h.start(start)
+        h.stop(start + 0.22)
+      })
+    }
+  }
+
+  playContractResult(accepted: boolean): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    if (accepted) {
+      // Bright ping at 880 Hz
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(880, t)
+      osc.frequency.linearRampToValueAtTime(1100, t + 0.05)
+      const env = ctx.createGain()
+      env.gain.setValueAtTime(0.2, t)
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.22)
+      osc.connect(env)
+      env.connect(this.sfxGain)
+      osc.start(t)
+      osc.stop(t + 0.25)
+    } else {
+      // Low blip at 220 Hz, slightly distorted
+      const osc = ctx.createOscillator()
+      osc.type = 'square'
+      osc.frequency.setValueAtTime(220, t)
+      osc.frequency.exponentialRampToValueAtTime(100, t + 0.1)
+      const filter = ctx.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.value = 400
+      const env = ctx.createGain()
+      env.gain.setValueAtTime(0.15, t)
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.15)
+      osc.connect(filter)
+      filter.connect(env)
+      env.connect(this.sfxGain)
+      osc.start(t)
+      osc.stop(t + 0.18)
+    }
+  }
+
+  playLevelUp(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.sfxGain) return
+    const t = ctx.currentTime
+    // 4-note ascending melody: C4 → Eb4 → G4 → C5
+    const melody = [NOTES.C4, NOTES.Eb4, NOTES.G4, NOTES.C5]
+    melody.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const env = ctx.createGain()
+      const start = t + i * 0.1
+      env.gain.setValueAtTime(0, start)
+      env.gain.linearRampToValueAtTime(0.22, start + 0.02)
+      env.gain.exponentialRampToValueAtTime(0.001, start + 0.25)
+      osc.connect(env)
+      env.connect(this.sfxGain!)
+      osc.start(start)
+      osc.stop(start + 0.28)
+    })
   }
 
   stopMusic(): void {

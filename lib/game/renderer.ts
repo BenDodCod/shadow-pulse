@@ -9,6 +9,8 @@ import { Mutator } from './mutators'
 import { ContractState, ConsumableType, getContractProgressText, getDifficultyColor } from './contracts'
 import { WaveAffix } from './affixes'
 import { WaveEvent } from './waves'
+import { AssetCache } from './assetLoader'
+import { getAnimFrame } from './spriteAnimator'
 
 /** Leaderboard entry passed from the daily challenge system */
 export interface DailyEntry {
@@ -72,6 +74,7 @@ export function render(
   pendingWaveEvent?: WaveEvent | null,
   activeWaveEvent?: WaveEvent | null,
   surgeZone?: { x: number; y: number; radius: number } | null,
+  assets?: AssetCache | null,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -110,7 +113,7 @@ export function render(
   }
 
   // Player
-  if (player.isAlive) drawPlayer(ctx, player, playerRarityGlowTimer ?? 0, playerRarityGlowColor ?? '#7b2fff')
+  if (player.isAlive) drawPlayer(ctx, player, playerRarityGlowTimer ?? 0, playerRarityGlowColor ?? '#7b2fff', assets ?? null)
 
   // Blackout event: near-black overlay with radial vision cutouts
   if (activeWaveEvent?.effectType === 'blackout') {
@@ -880,7 +883,7 @@ function drawSlashTrails(
   ctx.globalAlpha = 1
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, rarityGlowTimer = 0, rarityGlowColor = '#7b2fff'): void {
+function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, rarityGlowTimer = 0, rarityGlowColor = '#7b2fff', assets: AssetCache | null = null): void {
   ctx.save()
   ctx.translate(player.pos.x, player.pos.y)
   const now = Date.now()
@@ -947,31 +950,52 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, rarityGlowTim
   }
   ctx.globalAlpha = 1
 
-  // Body: octagon (shadow warrior silhouette)
-  const bodyColor = player.flashTimer > 0 ? S.HIT_FLASH_COLOR :
-                    player.isDashing ? S.PLAYER_DASH_COLOR : S.PLAYER_COLOR
-  ctx.fillStyle = bodyColor
-  ctx.shadowColor = S.NEON_GLOW
-  ctx.shadowBlur = player.isDashing ? 25 : 14
-  ctx.beginPath()
-  const bodyRotation = player.facing + Math.PI / 8
-  for (let i = 0; i < 8; i++) {
-    const angle = bodyRotation + (i / 8) * Math.PI * 2
-    const px = Math.cos(angle) * S.PLAYER_SIZE
-    const py = Math.sin(angle) * S.PLAYER_SIZE
-    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
-  }
-  ctx.closePath()
-  ctx.fill()
+  // Body: sprite sheet if loaded, otherwise octagon (procedural fallback)
+  if (assets?.player) {
+    const { sx, sy } = getAnimFrame(player.animState, player.animFrame)
+    const half = S.SPRITE_SIZE / 2
+    ctx.save()
+    ctx.rotate(player.facing + Math.PI / 2)
+    if (player.flashTimer > 0) {
+      // White flash on hit
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.globalAlpha = 0.7
+      ctx.fillStyle = S.HIT_FLASH_COLOR
+      ctx.fillRect(-half, -half, S.SPRITE_SIZE, S.SPRITE_SIZE)
+      ctx.globalAlpha = 1
+    }
+    ctx.shadowColor = S.NEON_GLOW
+    ctx.shadowBlur = player.isDashing ? 25 : 12
+    ctx.drawImage(assets.player, sx, sy, S.SPRITE_SIZE, S.SPRITE_SIZE, -half, -half, S.SPRITE_SIZE, S.SPRITE_SIZE)
+    ctx.shadowBlur = 0
+    ctx.restore()
+  } else {
+    // Procedural octagon (default until sprites are added)
+    const bodyColor = player.flashTimer > 0 ? S.HIT_FLASH_COLOR :
+                      player.isDashing ? S.PLAYER_DASH_COLOR : S.PLAYER_COLOR
+    ctx.fillStyle = bodyColor
+    ctx.shadowColor = S.NEON_GLOW
+    ctx.shadowBlur = player.isDashing ? 25 : 14
+    ctx.beginPath()
+    const bodyRotation = player.facing + Math.PI / 8
+    for (let i = 0; i < 8; i++) {
+      const angle = bodyRotation + (i / 8) * Math.PI * 2
+      const px = Math.cos(angle) * S.PLAYER_SIZE
+      const py = Math.sin(angle) * S.PLAYER_SIZE
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    }
+    ctx.closePath()
+    ctx.fill()
 
-  // Inner core
-  ctx.shadowColor = '#ffffff'
-  ctx.shadowBlur = 8
-  ctx.fillStyle = '#ffffff33'
-  ctx.beginPath()
-  ctx.arc(0, 0, S.PLAYER_SIZE * 0.4, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.shadowBlur = 0
+    // Inner core
+    ctx.shadowColor = '#ffffff'
+    ctx.shadowBlur = 8
+    ctx.fillStyle = '#ffffff33'
+    ctx.beginPath()
+    ctx.arc(0, 0, S.PLAYER_SIZE * 0.4, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+  }
 
   // Facing blade — ONLY while attacking
   if (player.attacking !== 'none') {

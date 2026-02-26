@@ -175,3 +175,6 @@ export const ARENA_CENTER_Y = GAME_HEIGHT / 2
 export function setArenaRadius(r: number): void {
   ARENA_RADIUS = r
 }
+
+// Sprites
+export const SPRITE_SIZE = 64 // px per frame in sprite sheet

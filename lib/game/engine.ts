@@ -6,6 +6,7 @@ import { ParticleSystem, createParticleSystem, updateParticles, emitHitSparks, e
 import { processPlayerAttacks, processEnemyAttacks, HitEffect } from './combat'
 import { spawnWaveEnemies, WaveEvent, selectWaveEvent } from './waves'
 import { render, DailyEntry } from './renderer'
+import { AssetCache } from './assetLoader'
 import { LevelTheme, Obstacle, Hazard, getLevelTheme, getLevelNumber, isLevelTransition, generateObstacles, generateHazards } from './levels'
 import * as S from './settings'
 import { setArenaRadius } from './settings'
@@ -218,6 +219,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         state.mutatorFeedback = { name: chosen.name, description: feedbackDesc + synergyText, color: chosen.color, timer: 2.5 }
         state.playerRarityGlowTimer = 2.0
         state.playerRarityGlowColor = chosen.color
+        audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
       }
       state.mutatorSelectionActive = false
       state.mutatorChoices = []
@@ -311,11 +313,17 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   // Player update (always full speed - player is immune to time slow)
   const prevAttacking = state.player.attacking
   const prevTimeFlicker = state.player.timeFlickerActive
+  const prevDashing = state.player.isDashing
   updatePlayer(state.player, input, dt, state.combinedModifiers)
 
   // Audio: time flicker activation
   if (state.player.timeFlickerActive && !prevTimeFlicker) {
     audio.playAttack('flicker')
+  }
+
+  // Audio: dash start
+  if (state.player.isDashing && !prevDashing) {
+    audio.playDash()
   }
 
   // Player-obstacle collision (push player out of pillars)
@@ -730,6 +738,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         setArenaRadius(state.levelTheme.arenaRadius)
         state.levelUpTimer = 3.0
         state.levelUpName = state.levelTheme.name
+        audio.playLevelUp()
       }
 
       const { arenaRadius, difficultyMult } = state.levelTheme
@@ -772,6 +781,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.waveActive = true
       state.waveTimer = 2.5
       audio.setMusicIntensity(state.wave)
+      audio.playWaveStart(state.wave)
 
       // Contract system - count enemies and select contract
       state.originalEnemyCounts = { normal: 0, sniper: 0, heavy: 0, fast: 0 }
@@ -791,6 +801,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.waveActive = false
       state.waveTimer = S.WAVE_DELAY
       state.score += state.wave * 100
+      audio.playWaveEnd()
 
       // Apply wave event score bonus if accepted
       if (state.activeWaveEvent) {
@@ -809,6 +820,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       if (contract && state.contractState.status === 'active') {
         const finalStatus = finalizeContract(contract, progress, state.originalEnemyCounts)
         state.contractState.status = finalStatus
+        audio.playContractResult(finalStatus === 'completed')
 
         // Apply rewards if completed
         if (finalStatus === 'completed') {
@@ -890,6 +902,7 @@ export function renderGame(
   state: GameState,
   ctx: CanvasRenderingContext2D,
   dailyLeaderboard?: DailyEntry[],
+  assets?: AssetCache | null,
 ): void {
   render(
     ctx,
@@ -944,6 +957,8 @@ export function renderGame(
     state.pendingWaveEvent,
     state.activeWaveEvent,
     state.surgeZone,
+    // Sprite assets
+    assets,
   )
 }
 

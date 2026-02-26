@@ -6,6 +6,7 @@ import { InputState } from '@/lib/game/player'
 import { audio } from '@/lib/game/audio'
 import { GAME_WIDTH, GAME_HEIGHT } from '@/lib/game/settings'
 import { DailyEntry } from '@/lib/game/renderer'
+import { AssetCache, loadAssets } from '@/lib/game/assetLoader'
 import {
   submitDailyChallengeScore,
   getDailyLeaderboard,
@@ -17,6 +18,7 @@ import {
 export default function ShadowPulseGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameStateRef = useRef<GameState | null>(null)
+  const assetsRef = useRef<AssetCache | null>(null)
   const [scale, setScale] = useState(1)
 
   useEffect(() => {
@@ -25,6 +27,11 @@ export default function ShadowPulseGame() {
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
+  }, [])
+
+  // Preload sprite assets on mount (non-blocking — game renders with fallback until ready)
+  useEffect(() => {
+    loadAssets().then(cache => { assetsRef.current = cache })
   }, [])
   const inputRef = useRef<InputState>({
     up: false,
@@ -225,7 +232,7 @@ export default function ShadowPulseGame() {
       }
 
       // Render
-      renderGame(state, ctx, dailyLeaderboard)
+      renderGame(state, ctx, dailyLeaderboard, assetsRef.current)
 
       animFrameRef.current = requestAnimationFrame(gameLoop)
     }

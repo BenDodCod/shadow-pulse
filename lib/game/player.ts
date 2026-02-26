@@ -1,7 +1,9 @@
 import { Vec2, vec2, add, scale, normalize, length, fromAngle, distance } from './vec2'
 import * as S from './settings'
 import { MutatorModifiers } from './mutators'
+import { PlayerAnimState, SPRITE_FRAME_COUNTS, SPRITE_ANIM_FPS, LOOPING_STATES } from './spriteAnimator'
 
+export type { PlayerAnimState }
 export type AttackType = 'none' | 'light' | 'heavy' | 'pulse_wave'
 
 export interface Player {
@@ -45,6 +47,11 @@ export interface Player {
 
   // Cooldown tracking (for HUD display)
   attackMaxCooldown: number
+
+  // Animation state (drives sprite sheet selection when assets are loaded)
+  animState: PlayerAnimState
+  animFrame: number
+  animTimer: number
 }
 
 export function createPlayer(): Player {
@@ -77,6 +84,9 @@ export function createPlayer(): Player {
     flashTimer: 0,
     trailPositions: [],
     attackMaxCooldown: 0,
+    animState: 'idle',
+    animFrame: 0,
+    animTimer: 0,
   }
 }
 
@@ -254,6 +264,47 @@ export function updatePlayer(player: Player, input: InputState, dt: number, modi
     if (player.trailPositions.length > 8) player.trailPositions.shift()
   } else {
     if (player.trailPositions.length > 0) player.trailPositions.shift()
+  }
+
+  // Animation state machine
+  const fps = SPRITE_ANIM_FPS[player.animState]
+  player.animTimer += dt
+  if (player.animTimer >= 1 / fps) {
+    player.animTimer -= 1 / fps
+    const frameCount = SPRITE_FRAME_COUNTS[player.animState]
+    if (LOOPING_STATES.has(player.animState)) {
+      player.animFrame = (player.animFrame + 1) % frameCount
+    } else {
+      player.animFrame = Math.min(player.animFrame + 1, frameCount - 1)
+    }
+  }
+
+  // Determine desired animation state (priority: death > hurt > dash > attacks > walk > idle)
+  let nextAnimState: PlayerAnimState
+  if (!player.isAlive) {
+    nextAnimState = 'death'
+  } else if (player.flashTimer > 0 && !player.isDashing) {
+    nextAnimState = 'hurt'
+  } else if (player.isDashing) {
+    nextAnimState = 'dash'
+  } else if (player.attacking === 'light') {
+    nextAnimState = 'light_attack'
+  } else if (player.heavyCharging) {
+    nextAnimState = 'heavy_charge'
+  } else if (player.attacking === 'heavy') {
+    nextAnimState = 'heavy_attack'
+  } else if (player.attacking === 'pulse_wave') {
+    nextAnimState = 'pulse_attack'
+  } else if (length(player.vel) > 10) {
+    nextAnimState = 'walk'
+  } else {
+    nextAnimState = 'idle'
+  }
+
+  if (nextAnimState !== player.animState) {
+    player.animState = nextAnimState
+    player.animFrame = 0
+    player.animTimer = 0
   }
 }
 
