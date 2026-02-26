@@ -3033,9 +3033,10 @@ function drawKeyboardPanel(
   ctx.globalAlpha = alpha
 
   const panelX = 12
-  const panelY = h - 130
-  const panelW = 310
   const panelH = 115
+  // Sit above the player vitals (HP label starts at h-80; add 8px gap)
+  const panelY = h - 80 - 8 - panelH
+  const panelW = 300
 
   // Panel background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
@@ -3070,24 +3071,15 @@ function drawKeyboardPanel(
     j: 'J', k: 'K', l: 'L', ';': ';', ' ': 'SPC',
   }
   const ACTION_LABELS: Record<string, string> = {
-    w: 'Move', a: '', s: '', d: '',
+    w: '', a: '', s: 'Move', d: '',
     j: 'Light', k: 'Heavy', l: 'Pulse', ';': 'Slow', ' ': 'Dash',
   }
 
-  const keyOrder = ['w', 'a', 's', 'd', 'j', 'k', 'l', ';', ' ']
   const kW = 28
   const kH = 26
-  const startKeyX = panelX + 8
-  const rowY = panelY + 30
-  const spacing = 32
-
-  // Row 1: WASD  |  J K L ; SPC
-  const row1Keys = ['w', 'a', 's', 'd']
-  const row2Keys = ['j', 'k', 'l', ';', ' ']
 
   const drawKey = (label: string, action: string, kx: number, ky: number, color: string, isUnlocked: boolean) => {
-    const kLabel = label
-    const kActual = label === 'SPC' ? 80 : label.length > 1 ? 40 : kW
+    const kActual = label === 'SPC' ? 44 : kW
     ctx.fillStyle = isUnlocked ? color + '22' : '#ffffff08'
     ctx.strokeStyle = isUnlocked ? color + 'cc' : '#ffffff22'
     ctx.lineWidth = 1
@@ -3099,7 +3091,7 @@ function drawKeyboardPanel(
     ctx.fillStyle = isUnlocked ? color : '#ffffff22'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(kLabel, kx + kActual / 2, ky + kH / 2)
+    ctx.fillText(label, kx + kActual / 2, ky + kH / 2)
 
     if (action && isUnlocked) {
       ctx.font = '8px monospace'
@@ -3109,22 +3101,25 @@ function drawKeyboardPanel(
     }
   }
 
-  // Row 1: WASD
-  let rx = startKeyX
-  for (const k of row1Keys) {
-    drawKey(KEY_LABELS[k], ACTION_LABELS[k], rx, rowY, KEY_COLORS[k], unlocked[k])
-    rx += kW + 4
-  }
+  // ── WASD: triangular keyboard shape ──────────────────────────────────
+  //       [W]
+  //    [A][S][D]
+  const wasdX = panelX + 10
+  const asdY  = panelY + 56
+  const wY    = asdY - kH - 5
 
-  // Separator gap
-  rx += 8
+  drawKey('W', '',     wasdX + kW + 4,       wY,   KEY_COLORS['w'], unlocked['w'])
+  drawKey('A', '',     wasdX,                asdY, KEY_COLORS['a'], unlocked['a'])
+  drawKey('S', 'Move', wasdX + kW + 4,       asdY, KEY_COLORS['s'], unlocked['s'])
+  drawKey('D', '',     wasdX + 2 * (kW + 4), asdY, KEY_COLORS['d'], unlocked['d'])
 
-  // Row 2: J K L ; SPC
-  for (const k of row2Keys) {
-    const kLabel = KEY_LABELS[k]
-    const kW2 = kLabel === 'SPC' ? 44 : kW
-    drawKey(kLabel, ACTION_LABELS[k], rx, rowY, KEY_COLORS[k], unlocked[k])
-    rx += kW2 + 4
+  // ── J K L ; SPC — aligned with ASD row ───────────────────────────────
+  // WASD block width: 3*(kW+4)-4 = 92px; gap = 12px
+  let cx = wasdX + 3 * (kW + 4) - 4 + 12
+  for (const k of ['j', 'k', 'l', ';', ' '] as const) {
+    const label = KEY_LABELS[k]
+    drawKey(label, ACTION_LABELS[k], cx, asdY, KEY_COLORS[k], unlocked[k])
+    cx += (label === 'SPC' ? 44 : kW) + 4
   }
 
   ctx.restore()
