@@ -156,15 +156,16 @@ export function render(
     drawContractBanner(ctx, contractState, w)
   }
 
-  // Wave event offer (shown during inter-wave break, takes priority over wave announcement)
-  if (pendingWaveEvent) {
-    drawWaveEventOffer(ctx, pendingWaveEvent, w, h)
+  // Mutator selection screen (must be resolved before wave event is shown,
+  // because the engine blocks on mutator input — Y/N won't fire until after)
+  if (mutatorSelectionActive && mutatorChoices.length > 0) {
+    drawMutatorSelection(ctx, mutatorChoices, activeMutators, mutatorSelectionTimer ?? 0, mutatorPeekActive ?? false, w, h)
     return
   }
 
-  // Mutator selection screen (takes priority over other overlays)
-  if (mutatorSelectionActive && mutatorChoices.length > 0) {
-    drawMutatorSelection(ctx, mutatorChoices, activeMutators, mutatorSelectionTimer ?? 0, mutatorPeekActive ?? false, w, h)
+  // Wave event offer (shown after mutator selection is complete)
+  if (pendingWaveEvent) {
+    drawWaveEventOffer(ctx, pendingWaveEvent, w, h)
     return
   }
 
