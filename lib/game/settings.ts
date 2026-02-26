@@ -189,6 +189,44 @@ export const DAMAGE_NUMBER_COLORS: Record<string, string> = {
   pulse: '#44ccff',
 }
 
+// ── Difficulty System ─────────────────────────────────────────────────────────
+export type DifficultyLevel = 'very_easy' | 'easy' | 'normal' | 'arcade'
+
+export interface DifficultyPreset {
+  enemyDamageMult: number   // multiplied on top of level-based scaling
+  enemySpeedMult: number
+  enemyHpMult: number
+  playerHpBonus: number     // flat HP added to base PLAYER_HP (can be negative)
+  waveCountMult: number     // scales enemy count per wave (min 1 per type)
+  hazardDamageMult: number
+  shrinkStartWave: number   // wave number when arena starts shrinking
+}
+
+export const DIFFICULTY_PRESETS: Record<DifficultyLevel | 'classroom', DifficultyPreset> = {
+  // Grades 1-2 classroom and standalone option for very young/new players
+  very_easy: {
+    enemyDamageMult: 0.40, enemySpeedMult: 0.55, enemyHpMult: 0.60,
+    playerHpBonus: 100, waveCountMult: 0.60, hazardDamageMult: 0.20, shrinkStartWave: 18,
+  },
+  easy: {
+    enemyDamageMult: 0.60, enemySpeedMult: 0.72, enemyHpMult: 0.75,
+    playerHpBonus: 50, waveCountMult: 0.75, hazardDamageMult: 0.50, shrinkStartWave: 12,
+  },
+  normal: {
+    enemyDamageMult: 1.00, enemySpeedMult: 1.00, enemyHpMult: 1.00,
+    playerHpBonus: 0,  waveCountMult: 1.00, hazardDamageMult: 1.00, shrinkStartWave: 10,
+  },
+  arcade: {
+    enemyDamageMult: 1.25, enemySpeedMult: 1.12, enemyHpMult: 1.20,
+    playerHpBonus: -15, waveCountMult: 1.20, hazardDamageMult: 1.25, shrinkStartWave: 8,
+  },
+  // Grades 3-6 classroom override (quiz-gated mutators, educational focus)
+  classroom: {
+    enemyDamageMult: 0.65, enemySpeedMult: 0.75, enemyHpMult: 0.80,
+    playerHpBonus: 30,  waveCountMult: 0.75, hazardDamageMult: 0.40, shrinkStartWave: 14,
+  },
+}
+
 // ── Hebrew Classroom Educational Layer ───────────────────────────────────────
 export const QUESTION_FEEDBACK_DURATION = 2000   // ms to show correct answer after wrong attempt
 export const KEYBOARD_PANEL_FADE_DELAY = 30000   // ms before panel fades (Grade 3-4)

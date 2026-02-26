@@ -122,18 +122,28 @@ export function getWaveConfig(wave: number): WaveConfig {
   }
 }
 
-export function spawnWaveEnemies(wave: number, arenaRadius: number, centerX: number, centerY: number, difficultyMult = 1.0, affix: WaveAffix | null = null): Enemy[] {
+export function spawnWaveEnemies(
+  wave: number,
+  arenaRadius: number,
+  centerX: number,
+  centerY: number,
+  difficultyMult = 1.0,
+  affix: WaveAffix | null = null,
+  presetMults?: { hp: number; speed: number; damage: number },
+  waveCountMult = 1.0,
+): Enemy[] {
   const config = getWaveConfig(wave)
   const enemies: Enemy[] = []
 
   for (const group of config.enemies) {
-    for (let i = 0; i < group.count; i++) {
+    const count = Math.max(1, Math.round(group.count * waveCountMult))
+    for (let i = 0; i < count; i++) {
       // Spawn around the arena edge
       const angle = rng() * Math.PI * 2
       const radius = arenaRadius * 0.7 + rng() * arenaRadius * 0.25
       const x = centerX + Math.cos(angle) * radius
       const y = centerY + Math.sin(angle) * radius
-      enemies.push(createEnemy(group.type, x, y, difficultyMult, affix))
+      enemies.push(createEnemy(group.type, x, y, difficultyMult, affix, presetMults))
     }
   }
 

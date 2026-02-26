@@ -10,7 +10,7 @@ import { render, DailyEntry } from './renderer'
 import { AssetCache } from './assetLoader'
 import { LevelTheme, Obstacle, Hazard, getLevelTheme, getLevelNumber, isLevelTransition, generateObstacles, generateHazards } from './levels'
 import * as S from './settings'
-import { setArenaRadius } from './settings'
+import { setArenaRadius, DifficultyLevel, DIFFICULTY_PRESETS, DifficultyPreset } from './settings'
 import { Mutator, MutatorModifiers, getRandomMutators, computeCombinedModifiers } from './mutators'
 import {
   ContractState,
@@ -112,6 +112,9 @@ export interface GameState {
   // Consumables
   consumables: ConsumableType[]
   consumableActive: { type: ConsumableType; timer: number } | null
+  // ── Difficulty system ─────────────────────────────────────────────────────
+  difficulty: DifficultyLevel  // 'easy' | 'normal' | 'arcade'
+  difficultyHpBonus: number    // flat HP added to PLAYER_HP from the active preset
   // ── Educational layer ────────────────────────────────────────────────────
   quizEnabled: boolean         // Classroom Mode on/off — all educational features gate on this
   selectedGrade: number
@@ -130,7 +133,18 @@ export interface GameState {
   pendingMutatorIndex: number    // which mutator was selected (0-indexed)
 }
 
-export function createGameState(isDailyChallenge = false, selectedGrade = 1, quizEnabled = false, selectedTopicId = 'english-vocab'): GameState {
+/** Returns the active DifficultyPreset, respecting Classroom (grade-split) and Daily overrides. */
+export function getEffectivePreset(state: GameState): DifficultyPreset {
+  if (state.isDailyChallenge) return DIFFICULTY_PRESETS['normal']
+  if (state.quizEnabled) {
+    // Grades 1-2: Very Easy — kids lack keyboard coordination, focus is on just playing
+    // Grades 3-6: Classroom — gentle but quiz-gated mutators require vocabulary
+    return state.selectedGrade <= 2 ? DIFFICULTY_PRESETS['very_easy'] : DIFFICULTY_PRESETS['classroom']
+  }
+  return DIFFICULTY_PRESETS[state.difficulty]
+}
+
+export function createGameState(isDailyChallenge = false, selectedGrade = 1, quizEnabled = false, selectedTopicId = 'english-vocab', difficulty: DifficultyLevel = 'normal'): GameState {
   const challengeDate = new Date().toISOString().slice(0, 10)
   if (isDailyChallenge) {
     setRng(createSeededRng(getDailySeed(challengeDate)))
@@ -138,9 +152,20 @@ export function createGameState(isDailyChallenge = false, selectedGrade = 1, qui
     resetToMathRandom()
   }
 
+  // Resolve effective preset (Daily locked to normal; Classroom splits by grade)
+  const effectiveDifficulty: DifficultyLevel | 'classroom' =
+    isDailyChallenge ? 'normal'
+    : quizEnabled ? (selectedGrade <= 2 ? 'very_easy' : 'classroom')
+    : difficulty
+  const preset = DIFFICULTY_PRESETS[effectiveDifficulty]
+  const difficultyHpBonus = preset.playerHpBonus
+
   const startTheme = getLevelTheme(1)
+  const basePlayer = createPlayer()
+  basePlayer.hp = S.PLAYER_HP + difficultyHpBonus
+  basePlayer.maxHp = S.PLAYER_HP + difficultyHpBonus
   return {
-    player: createPlayer(),
+    player: basePlayer,
     enemies: [],
     camera: createCamera(),
     particles: createParticleSystem(),
@@ -198,6 +223,9 @@ export function createGameState(isDailyChallenge = false, selectedGrade = 1, qui
     // Consumables
     consumables: [],
     consumableActive: null,
+    // Difficulty system
+    difficulty: isDailyChallenge ? 'normal' : difficulty,
+    difficultyHpBonus,
     // Educational layer
     quizEnabled,
     selectedGrade,
@@ -236,7 +264,7 @@ function applyPendingMutator(state: GameState): void {
     state.activeMutators.push(chosen)
   }
   state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
-  applyMutatorStats(state.player, state.combinedModifiers)
+  applyMutatorStats(state.player, state.combinedModifiers, state.difficultyHpBonus)
   const activeIdsAfter = new Set(state.activeMutators.map(m => m.id))
   const synergyHit = (chosen.synergizes ?? []).filter(id => activeIdsAfter.has(id))
   const synergyText = synergyHit.length > 0
@@ -248,10 +276,10 @@ function applyPendingMutator(state: GameState): void {
   audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
 }
 
-// Apply mutator stat changes to player
-function applyMutatorStats(player: Player, mods: MutatorModifiers): void {
-  // Recalculate max HP
-  const baseMaxHp = S.PLAYER_HP
+// Apply mutator stat changes to player (difficultyHpBonus preserves difficulty HP offset)
+function applyMutatorStats(player: Player, mods: MutatorModifiers, difficultyHpBonus = 0): void {
+  // Recalculate max HP (base + difficulty bonus + mutator bonus)
+  const baseMaxHp = S.PLAYER_HP + difficultyHpBonus
   player.maxHp = baseMaxHp + (mods.maxHpBonus ?? 0)
   player.hp = Math.min(player.hp, player.maxHp)
 
@@ -699,6 +727,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
 
   // Arena hazards update
   if (state.hazards.length > 0 && state.player.isAlive && state.waveActive) {
+    const hazardMult = getEffectivePreset(state).hazardDamageMult
     for (const hz of state.hazards) {
       const wasActive = hz.active
       hz.timer -= dt
@@ -711,7 +740,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         // Damage player if inside zone
         const d = distance(state.player.pos, hz.pos)
         if (d < hz.radius + S.PLAYER_SIZE && state.player.iframes <= 0 && !state.player.isDashing) {
-          state.player.hp -= S.HAZARD_ZONE_DAMAGE * dt
+          state.player.hp -= S.HAZARD_ZONE_DAMAGE * hazardMult * dt
           if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
           state.damageFlashTimer = Math.max(state.damageFlashTimer, 0.1)
           shakeCamera(state.camera, 4, 0.1)
@@ -729,7 +758,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
           while (diff > Math.PI) diff -= Math.PI * 2
           while (diff < -Math.PI) diff += Math.PI * 2
           if (Math.abs(diff) < Math.PI / 3 && state.player.iframes <= 0 && !state.player.isDashing) {
-            state.player.hp -= S.HAZARD_TRAP_DAMAGE
+            state.player.hp -= S.HAZARD_TRAP_DAMAGE * hazardMult
             state.player.iframes = S.PLAYER_IFRAMES * 0.8
             if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
             state.damageFlashTimer = S.DAMAGE_VIGNETTE_DURATION
@@ -746,7 +775,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         // Pulse shockwave — damage player and enemies in radius
         const playerDist = distance(state.player.pos, hz.pos)
         if (playerDist < hz.radius && state.player.iframes <= 0 && !state.player.isDashing) {
-          state.player.hp -= S.HAZARD_PULSE_DAMAGE
+          state.player.hp -= S.HAZARD_PULSE_DAMAGE * hazardMult
           state.player.iframes = S.PLAYER_IFRAMES
           if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
           state.damageFlashTimer = S.DAMAGE_VIGNETTE_DURATION
@@ -769,8 +798,8 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     }
   }
 
-  // Arena shrink (starts at SHRINK_START_WAVE)
-  if (state.wave >= S.SHRINK_START_WAVE && state.waveActive) {
+  // Arena shrink (start wave controlled by difficulty preset)
+  if (state.wave >= getEffectivePreset(state).shrinkStartWave && state.waveActive) {
     const newRadius = Math.max(S.SHRINK_MIN_RADIUS, S.ARENA_RADIUS - S.SHRINK_RATE * dt)
     setArenaRadius(newRadius)
   }
@@ -872,10 +901,12 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.currentAffix = selectAffixForWave(state.wave)
 
       // Spawn enemies — double_enemies event spawns 1.5× count
+      const diffPreset = getEffectivePreset(state)
+      const presetMults = { hp: diffPreset.enemyHpMult, speed: diffPreset.enemySpeedMult, damage: diffPreset.enemyDamageMult }
       const isDoubleEnemies = state.activeWaveEvent?.effectType === 'double_enemies'
-      let enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix)
+      let enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix, presetMults, diffPreset.waveCountMult)
       if (isDoubleEnemies) {
-        const extras = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix)
+        const extras = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix, presetMults, diffPreset.waveCountMult)
         // Add half the count of extras (50% more)
         enemies = enemies.concat(extras.slice(0, Math.ceil(extras.length * 0.5)))
       }
@@ -1106,12 +1137,19 @@ export function renderGame(
     state.questionRetryAvailable,
     state.questionFeedbackTimer,
     state.pendingMutatorIndex,
+    // Difficulty badge label (empty string = Normal, hidden)
+    state.quizEnabled
+      ? (state.selectedGrade <= 2 ? 'VERY EASY' : 'CLASSROOM')
+      : state.difficulty === 'very_easy' ? 'VERY EASY'
+      : state.difficulty === 'easy' ? 'EASY'
+      : state.difficulty === 'arcade' ? 'ARCADE'
+      : '',
   )
 }
 
 export function resetGame(state: GameState): GameState {
   const hs = state.highScore
-  const newState = createGameState(state.isDailyChallenge, state.selectedGrade, state.quizEnabled, state.selectedTopicId)
+  const newState = createGameState(state.isDailyChallenge, state.selectedGrade, state.quizEnabled, state.selectedTopicId, state.difficulty)
   newState.highScore = hs
   return newState
 }

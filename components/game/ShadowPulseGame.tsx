@@ -4,7 +4,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { GameState, createGameState, updateGame, renderGame, resetGame } from '@/lib/game/engine'
 import { InputState } from '@/lib/game/player'
 import { audio } from '@/lib/game/audio'
-import { GAME_WIDTH, GAME_HEIGHT, QUESTION_FEEDBACK_DURATION as QUIZ_FEEDBACK_MS, LETTER_FLASH_GRADES } from '@/lib/game/settings'
+import { GAME_WIDTH, GAME_HEIGHT, QUESTION_FEEDBACK_DURATION as QUIZ_FEEDBACK_MS, LETTER_FLASH_GRADES, DifficultyLevel } from '@/lib/game/settings'
 import { DailyEntry } from '@/lib/game/renderer'
 import { TOPICS } from '@/lib/game/questions'
 import { AssetCache, loadAssets } from '@/lib/game/assetLoader'
@@ -31,6 +31,9 @@ export default function ShadowPulseGame() {
   )
   const [selectedTopicId, setSelectedTopicId] = useState<string>(() =>
     typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_topic') ?? 'english-vocab' : 'english-vocab'
+  )
+  const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyLevel>(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_difficulty') as DifficultyLevel : null) ?? 'normal'
   )
 
   useEffect(() => {
@@ -71,11 +74,11 @@ export default function ShadowPulseGame() {
   const startGame = useCallback((isDailyChallenge = false) => {
     audio.init()
     audio.resume()
-    gameStateRef.current = createGameState(isDailyChallenge, selectedGrade, quizEnabled, selectedTopicId)
+    gameStateRef.current = createGameState(isDailyChallenge, selectedGrade, quizEnabled, selectedTopicId, selectedDifficulty)
     scoreSubmittedRef.current = false
     setDailyLeaderboard([])
     setStarted(true)
-  }, [selectedGrade, quizEnabled, selectedTopicId])
+  }, [selectedGrade, quizEnabled, selectedTopicId, selectedDifficulty])
 
   // Input handling
   useEffect(() => {
@@ -340,6 +343,11 @@ export default function ShadowPulseGame() {
           setSelectedTopicId(id)
           localStorage.setItem('shadowpulse_topic', id)
         }}
+        selectedDifficulty={selectedDifficulty}
+        onDifficultyChange={(d) => {
+          setSelectedDifficulty(d)
+          localStorage.setItem('shadowpulse_difficulty', d)
+        }}
       />
     )
   }
@@ -362,6 +370,20 @@ export default function ShadowPulseGame() {
   )
 }
 
+const DIFFICULTY_COLORS: Record<DifficultyLevel, { border: string; bg: string; text: string }> = {
+  very_easy: { border: '#44ddff88', bg: 'rgba(68,221,255,0.15)', text: '#66ddff' },
+  easy:      { border: '#44ff8888', bg: 'rgba(68,255,136,0.15)', text: '#44ff88' },
+  normal:    { border: '#7b2fff88', bg: 'rgba(123,47,255,0.20)', text: '#ffffffdd' },
+  arcade:    { border: '#ff664488', bg: 'rgba(255,102,68,0.15)', text: '#ff8866' },
+}
+
+const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  very_easy: 'VERY EASY',
+  easy:      'EASY',
+  normal:    'NORMAL',
+  arcade:    'ARCADE',
+}
+
 function TitleScreen({
   onStart,
   onStartDaily,
@@ -372,6 +394,8 @@ function TitleScreen({
   onQuizToggle,
   selectedTopicId,
   onTopicChange,
+  selectedDifficulty,
+  onDifficultyChange,
 }: {
   onStart: () => void
   onStartDaily: () => void
@@ -382,6 +406,8 @@ function TitleScreen({
   onQuizToggle: (v: boolean) => void
   selectedTopicId: string
   onTopicChange: (id: string) => void
+  selectedDifficulty: DifficultyLevel
+  onDifficultyChange: (d: DifficultyLevel) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
@@ -526,6 +552,39 @@ function TitleScreen({
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Difficulty Selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ ...mono, color: quizEnabled ? '#ffffff1a' : '#ffffff44', fontSize: '11px', letterSpacing: '0.2em' }}>DIFFICULTY</span>
+          {(['very_easy', 'easy', 'normal', 'arcade'] as DifficultyLevel[]).map(d => {
+            const isActive = selectedDifficulty === d && !quizEnabled
+            const dc = DIFFICULTY_COLORS[d]
+            return (
+              <button
+                key={d}
+                onClick={() => !quizEnabled && onDifficultyChange(d)}
+                style={{
+                  ...mono,
+                  background: isActive ? dc.bg : 'transparent',
+                  border: isActive ? `1px solid ${dc.border}` : '1px solid #ffffff11',
+                  borderRadius: '5px',
+                  color: quizEnabled ? '#ffffff1a' : isActive ? dc.text : '#ffffff33',
+                  fontSize: '12px',
+                  padding: '3px 10px',
+                  cursor: quizEnabled ? 'default' : 'pointer',
+                  fontWeight: isActive ? 'bold' : 'normal',
+                  letterSpacing: '0.08em',
+                  boxShadow: isActive ? `0 0 8px ${dc.border}` : 'none',
+                }}
+              >
+                {DIFFICULTY_LABELS[d]}
+              </button>
+            )
+          })}
+          {quizEnabled && (
+            <span style={{ ...mono, color: '#7b2fff66', fontSize: '10px', letterSpacing: '0.1em' }}>learning mode</span>
+          )}
         </div>
 
         {/* Classroom Mode */}

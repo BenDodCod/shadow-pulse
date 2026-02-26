@@ -42,7 +42,14 @@ export interface Enemy {
 
 let nextId = 0
 
-export function createEnemy(type: EnemyType, x: number, y: number, difficultyMult = 1.0, affix: WaveAffix | null = null): Enemy {
+export function createEnemy(
+  type: EnemyType,
+  x: number,
+  y: number,
+  difficultyMult = 1.0,
+  affix: WaveAffix | null = null,
+  presetMults?: { hp: number; speed: number; damage: number },
+): Enemy {
   const configs: Record<EnemyType, typeof S.NORMAL_ENEMY & { preferredDistance?: number; dodgeChance?: number; shockwaveRange?: number }> = {
     normal: S.NORMAL_ENEMY,
     sniper: S.SNIPER_ENEMY,
@@ -51,9 +58,16 @@ export function createEnemy(type: EnemyType, x: number, y: number, difficultyMul
   }
   const cfg = configs[type]
 
-  const scaledHp = Math.round(cfg.hp * difficultyMult)
-  const scaledSpeed = cfg.speed * Math.sqrt(difficultyMult) // speed grows slower than hp
-  const scaledDamage = Math.round(cfg.damage * (1 + (difficultyMult - 1) * 0.6)) // damage scales gently
+  // Level-based scaling
+  const levelHp = Math.round(cfg.hp * difficultyMult)
+  const levelSpeed = cfg.speed * Math.sqrt(difficultyMult) // speed grows slower than hp
+  const levelDamage = Math.round(cfg.damage * (1 + (difficultyMult - 1) * 0.6)) // damage scales gently
+
+  // Difficulty-preset layer (applied on top of level scaling)
+  const pm = presetMults ?? { hp: 1, speed: 1, damage: 1 }
+  const scaledHp = Math.round(levelHp * pm.hp)
+  const scaledSpeed = levelSpeed * pm.speed
+  const scaledDamage = Math.round(levelDamage * pm.damage)
 
   // Apply affix stat modifiers
   let finalSpeed = scaledSpeed
@@ -92,7 +106,7 @@ export function createEnemy(type: EnemyType, x: number, y: number, difficultyMul
     shockwaveTimer: 0,
     shockwaveRange: (cfg as typeof S.HEAVY_ENEMY).shockwaveRange || 0,
     affixState: createEnemyAffixState(affix),
-    baseDamage: scaledDamage,
+    baseDamage: scaledDamage,  // preset-scaled value (affix berserker multiplies this)
   }
 }
 

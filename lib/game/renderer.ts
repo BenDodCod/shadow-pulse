@@ -98,6 +98,8 @@ export function render(
   questionRetryAvailable?: boolean,
   questionFeedbackTimer?: number,
   pendingMutatorIndex?: number,
+  // Difficulty badge
+  difficultyLabel?: string,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -178,7 +180,7 @@ export function render(
   }
 
   // HUD
-  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h, lastStandUsed, isDailyChallenge)
+  drawHUD(ctx, player, wave, score, highScore, level, levelTheme, w, h, lastStandUsed, isDailyChallenge, difficultyLabel)
 
   // Active mutators HUD
   if (activeMutators.length > 0) {
@@ -1482,7 +1484,7 @@ function drawCracks(ctx: CanvasRenderingContext2D, size: number, hpRatio: number
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 
-function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number, lastStandUsed: boolean, isDailyChallenge?: boolean): void {
+function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, score: number, highScore: number, level: number, theme: LevelTheme, w: number, h: number, lastStandUsed: boolean, isDailyChallenge?: boolean, difficultyLabel?: string): void {
   const padding = 24
   const barWidth = 220
   const barHeight = 12
@@ -1602,6 +1604,23 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
     ctx.fillStyle = '#ffffff33'
     ctx.font = '11px monospace'
     ctx.fillText(`BEST ${highScore}`, w - padding, h - padding - 76)
+  }
+
+  // Difficulty badge (top-right, below BEST score) — hidden for Normal, shown otherwise
+  if (difficultyLabel) {
+    const diffColor = difficultyLabel === 'VERY EASY' ? '#66ddff'
+      : difficultyLabel === 'CLASSROOM' ? '#4dcfff'
+      : difficultyLabel === 'EASY' ? '#44ff88'
+      : '#ff8866'  // ARCADE
+    ctx.textAlign = 'right'
+    ctx.font = 'bold 11px monospace'
+    ctx.fillStyle = diffColor
+    ctx.shadowColor = diffColor
+    ctx.shadowBlur = 8
+    ctx.globalAlpha = 0.80
+    ctx.fillText(difficultyLabel, w - padding, h - padding - 94)
+    ctx.globalAlpha = 1
+    ctx.shadowBlur = 0
   }
 
   ctx.textAlign = 'left'
