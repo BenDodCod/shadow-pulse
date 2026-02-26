@@ -35,6 +35,19 @@ export interface MutatorModifiers {
   energyRegenMultiplier?: number
   knockbackMultiplier?: number
   iframesDurationMultiplier?: number
+
+  // Power Fantasy — auto-attack / special mechanics
+  autoLightAttack?: boolean       // light attack fires automatically on cooldown
+  autoPulseWave?: boolean         // pulse wave fires automatically when energy > 80
+  heavyChainCount?: number        // heavy chains to N nearest enemies after primary hit
+  dashDamagesEnemies?: boolean    // dashing through enemies deals damage
+  movementTrail?: boolean         // player leaves an afterimage trail while moving fast
+}
+
+export interface MutatorStackEffect {
+  stackLevel: number    // which pick (2nd pick = level 2, etc.)
+  description: string
+  modifierDelta: Partial<MutatorModifiers>
 }
 
 export interface Mutator {
@@ -45,6 +58,8 @@ export interface Mutator {
   color: string // theme color for UI
   modifiers: MutatorModifiers
   rarity: 'common' | 'rare' | 'epic'
+  synergizes?: MutatorId[]            // IDs that combo well with this mutator
+  stackEffects?: MutatorStackEffect[] // if present, mutator can be picked multiple times
 }
 
 // ============================================================================
@@ -61,6 +76,19 @@ export const MUTATOR_POOL: Mutator[] = [
     color: '#22ffaa',
     modifiers: { speedMultiplier: 1.15 },
     rarity: 'common',
+    synergizes: ['momentum', 'auto_light'],
+    stackEffects: [
+      {
+        stackLevel: 2,
+        description: '+15% speed + movement afterimage',
+        modifierDelta: { speedMultiplier: 1.15, movementTrail: true },
+      },
+      {
+        stackLevel: 3,
+        description: '+15% speed + dash damages enemies',
+        modifierDelta: { speedMultiplier: 1.15, dashDamagesEnemies: true },
+      },
+    ],
   },
   {
     id: 'energy_surge',
@@ -117,6 +145,7 @@ export const MUTATOR_POOL: Mutator[] = [
     color: '#ffaa22',
     modifiers: { heavyDamageMultiplier: 1.5, heavyCooldownBonus: 0.2 },
     rarity: 'rare',
+    synergizes: ['chain_heavy'],
   },
   {
     id: 'pulse_master',
@@ -126,6 +155,7 @@ export const MUTATOR_POOL: Mutator[] = [
     color: '#7b2fff',
     modifiers: { pulseWaveRangeMultiplier: 1.4, pulseWaveCostBonus: 10 },
     rarity: 'rare',
+    synergizes: ['auto_pulse'],
   },
   {
     id: 'shadow_step',
@@ -212,6 +242,39 @@ export const MUTATOR_POOL: Mutator[] = [
       heavyCooldownBonus: 0.1,
     },
     rarity: 'epic',
+    synergizes: ['chain_heavy'],
+  },
+
+  // === NEW EPIC — Power Fantasy ===
+  {
+    id: 'auto_light',
+    name: 'Shadow Reflexes',
+    description: 'Light attack fires automatically every 0.8s',
+    icon: '\u00bb\u00bb',
+    color: '#cc88ff',
+    modifiers: { autoLightAttack: true },
+    rarity: 'epic',
+    synergizes: ['swift_strikes', 'glass_cannon', 'quick_recovery'],
+  },
+  {
+    id: 'auto_pulse',
+    name: 'Pulse Resonance',
+    description: 'Pulse wave fires automatically when energy > 80',
+    icon: '\u25cb\u25cb',
+    color: '#7b2fff',
+    modifiers: { autoPulseWave: true },
+    rarity: 'epic',
+    synergizes: ['pulse_master', 'energy_surge', 'deep_reserves'],
+  },
+  {
+    id: 'chain_heavy',
+    name: 'Chain Devastation',
+    description: 'Heavy attack chains to 2 nearest enemies (60% dmg)',
+    icon: '\u26a1\u26a1',
+    color: '#ffaa22',
+    modifiers: { heavyChainCount: 2 },
+    rarity: 'epic',
+    synergizes: ['heavy_hitter', 'devastating_force'],
   },
 ]
 
@@ -227,7 +290,18 @@ export function getRandomMutators(
   count: number,
   ownedIds: MutatorId[]
 ): Mutator[] {
-  const available = MUTATOR_POOL.filter((m) => !ownedIds.includes(m.id))
+  // Count how many of each mutator is already owned (for stacking)
+  const ownedCount: Record<string, number> = {}
+  for (const id of ownedIds) {
+    ownedCount[id] = (ownedCount[id] || 0) + 1
+  }
+
+  const available = MUTATOR_POOL.filter((m) => {
+    const count = ownedCount[m.id] || 0
+    if (count === 0) return true // Not owned yet
+    if (m.stackEffects && count <= m.stackEffects.length) return true // Can still stack
+    return false
+  })
 
   if (available.length === 0) return []
 
@@ -270,7 +344,10 @@ export function computeCombinedModifiers(mutators: Mutator[]): MutatorModifiers 
   for (const mutator of mutators) {
     for (const [key, value] of Object.entries(mutator.modifiers)) {
       const k = key as keyof MutatorModifiers
-      if (k.endsWith('Multiplier')) {
+      if (typeof value === 'boolean') {
+        // Booleans: true if any mutator has it true
+        ;(combined as Record<string, unknown>)[k] = value || (combined as Record<string, unknown>)[k] || false
+      } else if (k.endsWith('Multiplier')) {
         // Multipliers stack multiplicatively
         combined[k] = ((combined[k] as number | undefined) ?? 1) * (value as number)
       } else {

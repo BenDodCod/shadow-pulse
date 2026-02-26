@@ -2,6 +2,67 @@ import { Enemy, createEnemy, EnemyType } from './enemy'
 import { WaveAffix } from './affixes'
 import { rng } from './seeded-rng'
 
+export interface WaveEvent {
+  id: string
+  name: string
+  description: string
+  rewardText: string
+  bonusScore: number
+  bonusHp?: number
+  bonusEnergy?: number
+  effectType: 'blackout' | 'surge_zone' | 'enemy_frenzy' | 'double_enemies'
+  duration: number   // -1 = whole wave
+}
+
+export const WAVE_EVENT_POOL: WaveEvent[] = [
+  {
+    id: 'blackout',
+    name: 'BLACKOUT',
+    description: 'Vision is limited. Enemies lurk in the dark.',
+    rewardText: '+300 score',
+    bonusScore: 300,
+    effectType: 'blackout',
+    duration: -1,
+  },
+  {
+    id: 'surge_zone',
+    name: 'SURGE ZONE',
+    description: 'A power zone appears. Deal 2× damage inside it.',
+    rewardText: '+200 score + energy refill',
+    bonusScore: 200,
+    bonusEnergy: 50,
+    effectType: 'surge_zone',
+    duration: -1,
+  },
+  {
+    id: 'enemy_frenzy',
+    name: 'ENEMY FRENZY',
+    description: 'Enemies move and attack 50% faster this wave.',
+    rewardText: '+400 score + 15 HP',
+    bonusScore: 400,
+    bonusHp: 15,
+    effectType: 'enemy_frenzy',
+    duration: -1,
+  },
+  {
+    id: 'double_enemies',
+    name: 'OVERWHELMING FORCE',
+    description: '50% more enemies spawn this wave.',
+    rewardText: '+500 score + 20 HP',
+    bonusScore: 500,
+    bonusHp: 20,
+    effectType: 'double_enemies',
+    duration: -1,
+  },
+]
+
+export function selectWaveEvent(wave: number): WaveEvent | null {
+  if (wave < 3) return null
+  if (rng() > 0.25) return null   // 25% chance
+  const idx = Math.floor(rng() * WAVE_EVENT_POOL.length)
+  return WAVE_EVENT_POOL[idx]
+}
+
 export interface WaveConfig {
   enemies: { type: EnemyType; count: number }[]
 }

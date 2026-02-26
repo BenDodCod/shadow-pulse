@@ -2,12 +2,13 @@ import { Player } from './player'
 import { Enemy, EnemyType } from './enemy'
 import { Camera } from './camera'
 import { ParticleSystem, drawParticles } from './particles'
-import { LevelTheme, Obstacle } from './levels'
+import { LevelTheme, Obstacle, Hazard } from './levels'
 import { fromAngle } from './vec2'
 import * as S from './settings'
 import { Mutator } from './mutators'
-import { ContractState, getContractProgressText, getDifficultyColor } from './contracts'
+import { ContractState, ConsumableType, getContractProgressText, getDifficultyColor } from './contracts'
 import { WaveAffix } from './affixes'
+import { WaveEvent } from './waves'
 
 /** Leaderboard entry passed from the daily challenge system */
 export interface DailyEntry {
@@ -31,6 +32,7 @@ export function render(
   highScore: number,
   levelTheme: LevelTheme,
   obstacles: Obstacle[],
+  hazards: Hazard[],
   level: number,
   levelUpTimer: number,
   levelUpName: string,
@@ -53,6 +55,23 @@ export function render(
   dailyLeaderboard?: DailyEntry[],
   // Mutator feedback overlay
   mutatorFeedback?: { name: string; description: string; color: string; timer: number } | null,
+  // Damage feedback
+  damageFlashTimer?: number,
+  damageDir?: { x: number; y: number },
+  // Slash trails
+  slashTrails?: Array<{ pos: { x: number; y: number }; facing: number; attackType: string; age: number; maxAge: number }>,
+  // Mutator ceremony
+  mutatorSelectionTimer?: number,
+  mutatorPeekActive?: boolean,
+  playerRarityGlowTimer?: number,
+  playerRarityGlowColor?: string,
+  // Consumables
+  consumables?: ConsumableType[],
+  consumableActive?: { type: ConsumableType; timer: number } | null,
+  // Wave events
+  pendingWaveEvent?: WaveEvent | null,
+  activeWaveEvent?: WaveEvent | null,
+  surgeZone?: { x: number; y: number; radius: number } | null,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -71,6 +90,12 @@ export function render(
   // Obstacles
   drawObstacles(ctx, obstacles, levelTheme, now)
 
+  // Hazards (drawn on floor, below particles and entities)
+  if (hazards.length > 0) drawHazards(ctx, hazards, now)
+
+  // Surge zone (drawn on floor, player-benefit zone)
+  if (surgeZone) drawSurgeZone(ctx, surgeZone, now)
+
   // Ambient particles
   drawParticles(ctx, particles)
 
@@ -79,15 +104,35 @@ export function render(
     if (enemy.isAlive) drawEnemy(ctx, enemy)
   }
 
+  // Slash trails (drawn before player so player renders on top)
+  if (slashTrails && slashTrails.length > 0) {
+    drawSlashTrails(ctx, slashTrails, player)
+  }
+
   // Player
-  if (player.isAlive) drawPlayer(ctx, player)
+  if (player.isAlive) drawPlayer(ctx, player, playerRarityGlowTimer ?? 0, playerRarityGlowColor ?? '#7b2fff')
+
+  // Blackout event: near-black overlay with radial vision cutouts
+  if (activeWaveEvent?.effectType === 'blackout') {
+    drawBlackout(ctx, player, enemies, w, h)
+  }
 
   // Restore camera transform for HUD
   ctx.restore()
 
+  // Damage feedback (red vignette + directional blur)
+  if (damageFlashTimer && damageFlashTimer > 0) {
+    drawDamageFeedback(ctx, damageFlashTimer, damageDir ?? { x: 0, y: 0 }, w, h)
+  }
+
   // Last Stand screen effect
   if (lastStandActive) {
     drawLastStandEffect(ctx, lastStandTimer, w, h)
+  }
+
+  // Consumable active effect (screen overlay)
+  if (consumableActive) {
+    drawConsumableEffect(ctx, consumableActive, w, h)
   }
 
   // HUD
@@ -98,14 +143,25 @@ export function render(
     drawActiveMutators(ctx, activeMutators, w, h)
   }
 
+  // Consumable HUD
+  if (consumables && (consumables.length > 0 || consumableActive)) {
+    drawConsumableHUD(ctx, consumables, consumableActive ?? null, w, h)
+  }
+
   // Contract banner (top-center)
   if (contractState.contract) {
     drawContractBanner(ctx, contractState, w)
   }
 
+  // Wave event offer (shown during inter-wave break, takes priority over wave announcement)
+  if (pendingWaveEvent) {
+    drawWaveEventOffer(ctx, pendingWaveEvent, w, h)
+    return
+  }
+
   // Mutator selection screen (takes priority over other overlays)
   if (mutatorSelectionActive && mutatorChoices.length > 0) {
-    drawMutatorSelection(ctx, mutatorChoices, w, h)
+    drawMutatorSelection(ctx, mutatorChoices, activeMutators, mutatorSelectionTimer ?? 0, mutatorPeekActive ?? false, w, h)
     return
   }
 
@@ -419,47 +475,430 @@ function drawApocalypseFloor(ctx: CanvasRenderingContext2D, theme: LevelTheme, c
 
 function drawObstacles(ctx: CanvasRenderingContext2D, obstacles: Obstacle[], theme: LevelTheme, now: number): void {
   for (const obs of obstacles) {
-    // Glow halo
-    const grad = ctx.createRadialGradient(obs.x, obs.y, obs.radius * 0.5, obs.x, obs.y, obs.radius * 1.6)
-    grad.addColorStop(0, theme.glowColor + '18')
+    const isRubble = obs.state === 'rubble'
+    const isCracked = obs.state === 'cracked'
+    const drawRadius = isRubble ? obs.rubbleRadius : obs.radius
+    const alpha = isRubble ? 0.45 : 1.0
+
+    ctx.globalAlpha = alpha
+
+    // Glow halo (dimmer when damaged)
+    const haloAlpha = isRubble ? '08' : isCracked ? '12' : '18'
+    const grad = ctx.createRadialGradient(obs.x, obs.y, drawRadius * 0.5, obs.x, obs.y, drawRadius * 1.8)
+    grad.addColorStop(0, theme.glowColor + haloAlpha)
     grad.addColorStop(1, 'transparent')
     ctx.fillStyle = grad
     ctx.beginPath()
-    ctx.arc(obs.x, obs.y, obs.radius * 1.6, 0, Math.PI * 2)
+    ctx.arc(obs.x, obs.y, drawRadius * 1.8, 0, Math.PI * 2)
     ctx.fill()
 
     // Pillar body
-    ctx.fillStyle = theme.floorColor
+    ctx.fillStyle = isRubble ? theme.gridColor : theme.floorColor
     ctx.shadowColor = theme.glowColor
-    ctx.shadowBlur = 12
+    ctx.shadowBlur = isRubble ? 4 : isCracked ? 8 : 12
     ctx.beginPath()
-    ctx.arc(obs.x, obs.y, obs.radius, 0, Math.PI * 2)
+    ctx.arc(obs.x, obs.y, drawRadius, 0, Math.PI * 2)
     ctx.fill()
     ctx.shadowBlur = 0
 
     // Border
     const pulse = Math.sin(now * 0.002 + obs.x * 0.01) * 0.3 + 0.5
-    ctx.strokeStyle = theme.glowColor + Math.round(pulse * 160).toString(16).padStart(2, '0')
-    ctx.lineWidth = 2
+    const borderAlpha = isRubble ? 0x44 : Math.round(pulse * 160)
+    ctx.strokeStyle = theme.glowColor + borderAlpha.toString(16).padStart(2, '0')
+    ctx.lineWidth = isRubble ? 1 : 2
     ctx.beginPath()
-    ctx.arc(obs.x, obs.y, obs.radius, 0, Math.PI * 2)
+    ctx.arc(obs.x, obs.y, drawRadius, 0, Math.PI * 2)
     ctx.stroke()
 
-    // Inner symbol
-    ctx.strokeStyle = theme.accentColor + '44'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.arc(obs.x, obs.y, obs.radius * 0.5, 0, Math.PI * 2)
-    ctx.stroke()
+    if (!isRubble) {
+      // Inner symbol ring
+      ctx.strokeStyle = theme.accentColor + (isCracked ? '22' : '44')
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.arc(obs.x, obs.y, drawRadius * 0.5, 0, Math.PI * 2)
+      ctx.stroke()
+
+      if (isCracked) {
+        // Crack lines — 3 radial fractures
+        ctx.strokeStyle = theme.glowColor + '66'
+        ctx.lineWidth = 1.5
+        for (let c = 0; c < 3; c++) {
+          const crackAngle = (c / 3) * Math.PI * 2 + obs.x * 0.05
+          ctx.beginPath()
+          ctx.moveTo(obs.x + Math.cos(crackAngle) * drawRadius * 0.2, obs.y + Math.sin(crackAngle) * drawRadius * 0.2)
+          ctx.lineTo(obs.x + Math.cos(crackAngle) * drawRadius * 0.95, obs.y + Math.sin(crackAngle) * drawRadius * 0.95)
+          ctx.stroke()
+        }
+        // HP bar below pillar
+        const barW = drawRadius * 2
+        const barX = obs.x - barW / 2
+        const barY = obs.y + drawRadius + 6
+        ctx.fillStyle = '#33333388'
+        ctx.fillRect(barX, barY, barW, 4)
+        ctx.fillStyle = theme.glowColor + 'cc'
+        ctx.fillRect(barX, barY, barW * (obs.hp / obs.maxHp), 4)
+      }
+    } else {
+      // Rubble: scattered debris dots
+      ctx.fillStyle = theme.gridColor
+      for (let d = 0; d < 5; d++) {
+        const dAngle = (d / 5) * Math.PI * 2 + obs.x * 0.1
+        const dDist = drawRadius * 1.3
+        ctx.beginPath()
+        ctx.arc(obs.x + Math.cos(dAngle) * dDist, obs.y + Math.sin(dAngle) * dDist, 2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+
+    ctx.globalAlpha = 1
   }
+}
+
+// ─── Hazards ─────────────────────────────────────────────────────────────────
+
+function drawHazards(ctx: CanvasRenderingContext2D, hazards: Hazard[], now: number): void {
+  for (const hz of hazards) {
+    if (hz.type === 'floor_zone') {
+      // Pulse the zone — flashing as warning when about to turn on (last 0.5s of off phase)
+      const isWarning = !hz.active && hz.timer < 0.5
+      const baseAlpha = hz.active ? 0.35 : isWarning ? 0.15 + Math.sin(now * 0.02) * 0.12 : 0.07
+      ctx.globalAlpha = baseAlpha
+
+      const grad = ctx.createRadialGradient(hz.pos.x, hz.pos.y, 0, hz.pos.x, hz.pos.y, hz.radius)
+      grad.addColorStop(0, hz.color + 'cc')
+      grad.addColorStop(0.6, hz.color + '88')
+      grad.addColorStop(1, hz.color + '22')
+      ctx.fillStyle = grad
+      ctx.beginPath()
+      ctx.arc(hz.pos.x, hz.pos.y, hz.radius, 0, Math.PI * 2)
+      ctx.fill()
+
+      if (hz.active) {
+        // Active border pulses
+        const pulse = Math.sin(now * 0.01) * 0.4 + 0.6
+        ctx.strokeStyle = hz.color
+        ctx.lineWidth = 2
+        ctx.globalAlpha = pulse
+        ctx.beginPath()
+        ctx.arc(hz.pos.x, hz.pos.y, hz.radius, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      ctx.globalAlpha = 1
+    }
+
+    if (hz.type === 'wall_trap') {
+      const trapAngle = hz.trapAngle ?? 0
+      const isCharging = hz.timer < 0.6 // last 0.6s before firing = warning
+      ctx.save()
+      ctx.translate(hz.pos.x, hz.pos.y)
+      ctx.rotate(trapAngle)
+
+      // Trap body (small diamond/chevron)
+      ctx.fillStyle = hz.color + '99'
+      ctx.strokeStyle = hz.color
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(12, 0)
+      ctx.lineTo(0, 8)
+      ctx.lineTo(-8, 0)
+      ctx.lineTo(0, -8)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+
+      // Laser sight line when charging
+      if (isCharging) {
+        const warningAlpha = 0.3 + Math.sin(now * 0.03) * 0.25
+        ctx.globalAlpha = warningAlpha
+        ctx.strokeStyle = hz.color
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([6, 4])
+        ctx.beginPath()
+        ctx.moveTo(14, 0)
+        ctx.lineTo(S.HAZARD_TRAP_RANGE, 0)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+
+      ctx.restore()
+      ctx.globalAlpha = 1
+    }
+
+    if (hz.type === 'pulse_center') {
+      // Ring expands outward when about to pulse (last 1.5s of off phase)
+      const isWarning = !hz.active && hz.timer < 1.5
+      if (isWarning) {
+        const progress = 1 - hz.timer / 1.5 // 0→1 as it approaches pulse
+        const expandR = hz.radius * progress
+        ctx.globalAlpha = (1 - progress) * 0.5 + 0.1
+        ctx.strokeStyle = hz.color
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.arc(hz.pos.x, hz.pos.y, expandR, 0, Math.PI * 2)
+        ctx.stroke()
+        // Inner warning glow at center
+        ctx.globalAlpha = 0.15 + progress * 0.2
+        ctx.fillStyle = hz.color
+        ctx.beginPath()
+        ctx.arc(hz.pos.x, hz.pos.y, 18, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+      if (hz.active) {
+        // Shockwave ring expanding outward
+        const progress = 1 - hz.timer / hz.onDuration
+        const shockR = hz.radius * progress
+        ctx.globalAlpha = (1 - progress) * 0.8
+        ctx.strokeStyle = hz.color
+        ctx.lineWidth = 5
+        ctx.beginPath()
+        ctx.arc(hz.pos.x, hz.pos.y, shockR, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
+    }
+  }
+}
+
+// ─── Wave Events ─────────────────────────────────────────────────────────────
+
+function drawSurgeZone(ctx: CanvasRenderingContext2D, zone: { x: number; y: number; radius: number }, now: number): void {
+  const pulse = Math.sin(now * 0.005) * 0.15 + 0.85
+  // Outer glow
+  const grad = ctx.createRadialGradient(zone.x, zone.y, 0, zone.x, zone.y, zone.radius)
+  grad.addColorStop(0, '#22ffcc44')
+  grad.addColorStop(0.5, '#22ffcc22')
+  grad.addColorStop(1, 'transparent')
+  ctx.fillStyle = grad
+  ctx.beginPath()
+  ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2)
+  ctx.fill()
+  // Border ring
+  ctx.globalAlpha = pulse * 0.8
+  ctx.strokeStyle = '#22ffcc'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2)
+  ctx.stroke()
+  // Label
+  ctx.globalAlpha = 0.7
+  ctx.font = 'bold 10px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#22ffcc'
+  ctx.fillText('2× DMG', zone.x, zone.y + 4)
+  ctx.globalAlpha = 1
+}
+
+function drawBlackout(ctx: CanvasRenderingContext2D, player: Player, enemies: Enemy[], w: number, h: number): void {
+  // Create composite dark overlay with vision cutouts
+  ctx.save()
+  // First: fill near-black overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.88)'
+  ctx.fillRect(0, 0, w, h)
+
+  // Cutout: player vision (150px radius)
+  ctx.globalCompositeOperation = 'destination-out'
+  const playerGrad = ctx.createRadialGradient(player.pos.x, player.pos.y, 0, player.pos.x, player.pos.y, 150)
+  playerGrad.addColorStop(0, 'rgba(0,0,0,1)')
+  playerGrad.addColorStop(0.6, 'rgba(0,0,0,0.8)')
+  playerGrad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = playerGrad
+  ctx.beginPath()
+  ctx.arc(player.pos.x, player.pos.y, 150, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Enemy glimpses (60px)
+  for (const enemy of enemies) {
+    if (!enemy.isAlive) continue
+    const enemyGrad = ctx.createRadialGradient(enemy.pos.x, enemy.pos.y, 0, enemy.pos.x, enemy.pos.y, 60)
+    enemyGrad.addColorStop(0, 'rgba(0,0,0,0.6)')
+    enemyGrad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = enemyGrad
+    ctx.beginPath()
+    ctx.arc(enemy.pos.x, enemy.pos.y, 60, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.restore()
+}
+
+function drawWaveEventOffer(ctx: CanvasRenderingContext2D, event: WaveEvent, w: number, h: number): void {
+  const now = Date.now()
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'
+  ctx.fillRect(0, 0, w, h)
+
+  // Ambient flicker
+  for (let i = 0; i < 20; i++) {
+    const sx = ((Math.sin(now * 0.00015 + i * 3.1) + 1) / 2) * w
+    const sy = ((Math.cos(now * 0.0002 + i * 2.3) + 1) / 2) * h
+    ctx.globalAlpha = Math.sin(now * 0.001 + i) * 0.1 + 0.1
+    ctx.fillStyle = '#ff4400'
+    ctx.beginPath()
+    ctx.arc(sx, sy, i % 3 === 0 ? 2 : 1, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+
+  // Title
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#ff8844'
+  ctx.shadowColor = '#ff4400'
+  ctx.shadowBlur = 25
+  ctx.font = 'bold 14px monospace'
+  ctx.fillText('⚠  INCOMING CHALLENGE  ⚠', w / 2, h / 2 - 130)
+  ctx.shadowBlur = 0
+
+  // Card
+  const cardW = 380, cardH = 240
+  const cardX = (w - cardW) / 2, cardY = h / 2 - 100
+  ctx.fillStyle = '#110800'
+  ctx.strokeStyle = '#ff4400aa'
+  ctx.lineWidth = 2
+  roundRect(ctx, cardX, cardY, cardW, cardH, 14)
+  ctx.fill()
+  ctx.stroke()
+
+  // Event name (big)
+  ctx.font = 'bold 34px monospace'
+  ctx.fillStyle = '#ff8844'
+  ctx.shadowColor = '#ff4400'
+  ctx.shadowBlur = 20
+  ctx.fillText(event.name, w / 2, cardY + 58)
+  ctx.shadowBlur = 0
+
+  // Description
+  ctx.font = '15px monospace'
+  ctx.fillStyle = '#ffffffcc'
+  const descLines = wrapText(event.description, 36)
+  for (let i = 0; i < descLines.length; i++) {
+    ctx.fillText(descLines[i], w / 2, cardY + 98 + i * 22)
+  }
+
+  // Reward line
+  ctx.font = 'bold 13px monospace'
+  ctx.fillStyle = '#22ffaa'
+  ctx.shadowColor = '#22ffaa'
+  ctx.shadowBlur = 10
+  ctx.fillText(`REWARD: ${event.rewardText}`, w / 2, cardY + 165)
+  ctx.shadowBlur = 0
+
+  // Y/N prompts
+  const yFlash = Math.sin(now * 0.008) * 0.2 + 0.8
+  ctx.font = 'bold 22px monospace'
+  ctx.globalAlpha = yFlash
+  ctx.fillStyle = '#22ffaa'
+  ctx.shadowColor = '#22ffaa'
+  ctx.shadowBlur = 12
+  ctx.fillText('[Y] Accept', w / 2 - 80, cardY + cardH + 32)
+  ctx.shadowBlur = 0
+  ctx.globalAlpha = 0.5
+  ctx.fillStyle = '#ff6644'
+  ctx.fillText('[N] Decline', w / 2 + 80, cardY + cardH + 32)
+  ctx.globalAlpha = 1
 }
 
 // ─── Player ──────────────────────────────────────────────────────────────────
 
-function drawPlayer(ctx: CanvasRenderingContext2D, player: Player): void {
+function drawSlashTrails(
+  ctx: CanvasRenderingContext2D,
+  trails: Array<{ pos: { x: number; y: number }; facing: number; attackType: string; age: number; maxAge: number }>,
+  player: Player,
+): void {
+  const attackColors: Record<string, string> = {
+    light: '#cc88ff',
+    heavy: '#ffaa22',
+    pulse_wave: '#aa44ff',
+  }
+
+  for (const trail of trails) {
+    const t = trail.age / trail.maxAge         // 0 = fresh, 1 = expired
+    const remaining = 1 - t                    // 1 = fresh, 0 = expired
+    const color = attackColors[trail.attackType] ?? '#cc88ff'
+
+    ctx.save()
+    ctx.translate(trail.pos.x, trail.pos.y)
+
+    // 1. Arc glow — faded attack arc at trail position
+    const arcRanges: Record<string, [number, number]> = {
+      light: [S.LIGHT_RANGE, S.LIGHT_ARC],
+      heavy: [S.HEAVY_RANGE, S.HEAVY_ARC],
+      pulse_wave: [S.PULSE_WAVE_RANGE, S.PULSE_WAVE_ARC],
+    }
+    const [range, arc] = arcRanges[trail.attackType] ?? [S.LIGHT_RANGE, S.LIGHT_ARC]
+    ctx.globalAlpha = remaining * 0.35
+    ctx.fillStyle = color
+    ctx.shadowColor = color
+    ctx.shadowBlur = 18
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.arc(0, 0, range * 1.1, trail.facing - arc / 2, trail.facing + arc / 2)
+    ctx.closePath()
+    ctx.fill()
+    ctx.shadowBlur = 0
+
+    // 2. After-image — ghost octagon at trail position
+    ctx.globalAlpha = S.SLASH_AFTER_IMAGE_ALPHA * remaining
+    ctx.fillStyle = color
+    ctx.beginPath()
+    const bodyRot = trail.facing + Math.PI / 8
+    for (let i = 0; i < 8; i++) {
+      const a = bodyRot + (i / 8) * Math.PI * 2
+      const px = Math.cos(a) * S.PLAYER_SIZE
+      const py = Math.sin(a) * S.PLAYER_SIZE
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    }
+    ctx.closePath()
+    ctx.fill()
+
+    ctx.globalAlpha = 1
+    ctx.restore()
+
+    // 3. Energy ribbon — Bezier from trail pos to current player pos
+    const ribbonWidth = S.SLASH_RIBBON_WIDTH * remaining
+    if (ribbonWidth > 0.5) {
+      ctx.save()
+      ctx.globalAlpha = remaining * 0.6
+      ctx.strokeStyle = color
+      ctx.shadowColor = color
+      ctx.shadowBlur = 12
+      ctx.lineWidth = ribbonWidth
+      ctx.lineCap = 'round'
+      // Control point: midpoint between trail and player, offset perpendicular
+      const mx = (trail.pos.x + player.pos.x) / 2
+      const my = (trail.pos.y + player.pos.y) / 2
+      const perpX = -(player.pos.y - trail.pos.y) * 0.3
+      const perpY = (player.pos.x - trail.pos.x) * 0.3
+      ctx.beginPath()
+      ctx.moveTo(trail.pos.x, trail.pos.y)
+      ctx.quadraticCurveTo(mx + perpX, my + perpY, player.pos.x, player.pos.y)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+      ctx.restore()
+    }
+  }
+  ctx.globalAlpha = 1
+}
+
+function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, rarityGlowTimer = 0, rarityGlowColor = '#7b2fff'): void {
   ctx.save()
   ctx.translate(player.pos.x, player.pos.y)
   const now = Date.now()
+
+  // Rarity glow halo (after picking a mutator)
+  if (rarityGlowTimer > 0) {
+    const glowT = rarityGlowTimer / 2.0
+    const glowAlpha = Math.sqrt(glowT) * 0.8
+    const glowRadius = S.PLAYER_SIZE * (3 + (2.0 - rarityGlowTimer) * 2)
+    const glowGrad = ctx.createRadialGradient(0, 0, S.PLAYER_SIZE * 0.5, 0, 0, glowRadius)
+    glowGrad.addColorStop(0, rarityGlowColor + Math.round(glowAlpha * 255).toString(16).padStart(2, '0'))
+    glowGrad.addColorStop(1, 'transparent')
+    ctx.globalAlpha = 1
+    ctx.fillStyle = glowGrad
+    ctx.beginPath()
+    ctx.arc(0, 0, glowRadius, 0, Math.PI * 2)
+    ctx.fill()
+  }
 
   // Dash trail
   for (let i = 0; i < player.trailPositions.length; i++) {
@@ -697,10 +1136,11 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
     ctx.fill()
   }
 
-  // Wave affix aura and icon
+  // Wave affix aura, icon, and full visual transform
   const affix = enemy.affixState.affix
   if (affix) {
     drawAffixAura(ctx, enemy, affix, now)
+    drawAffixTransform(ctx, enemy, affix, now)
   }
 
   // Glow — intensifies when attacking or critically low
@@ -1053,7 +1493,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, player: Player, wave: number, sc
   ctx.fillStyle = '#ffffff22'
   ctx.font = '10px monospace'
   ctx.textAlign = 'center'
-  ctx.fillText('WASD Move | SPACE Dash | J Light | K Heavy | L Pulse | ; Time', w / 2, h - 4)
+  ctx.fillText('WASD Move | SPACE Dash | J Light | K Heavy | L Pulse | ; Time | Q Consumable', w / 2, h - 4)
   ctx.textAlign = 'left'
 
   // Daily Challenge badge (top-left)
@@ -1253,6 +1693,41 @@ function drawLevelAnnouncement(ctx: CanvasRenderingContext2D, level: number, nam
   ctx.textAlign = 'left'
 }
 
+function drawDamageFeedback(
+  ctx: CanvasRenderingContext2D,
+  flashTimer: number,
+  damageDir: { x: number; y: number },
+  w: number,
+  h: number,
+): void {
+  const alpha = flashTimer / S.DAMAGE_VIGNETTE_DURATION
+
+  // Red vignette
+  const cx = w / 2
+  const cy = h / 2
+  const vigGrad = ctx.createRadialGradient(cx, cy, w * 0.2, cx, cy, w * 0.75)
+  vigGrad.addColorStop(0, 'transparent')
+  vigGrad.addColorStop(0.6, 'transparent')
+  vigGrad.addColorStop(1, `rgba(200,0,0,${0.55 * alpha})`)
+  ctx.fillStyle = vigGrad
+  ctx.fillRect(0, 0, w, h)
+
+  // Directional blur — 3 semi-transparent offset overlays in the opposite direction (toward attacker)
+  const blurRatio = Math.max(0, (flashTimer - (S.DAMAGE_VIGNETTE_DURATION - S.DAMAGE_BLUR_DURATION)) / S.DAMAGE_BLUR_DURATION)
+  if (blurRatio > 0 && (damageDir.x !== 0 || damageDir.y !== 0)) {
+    // Invert: blur toward attacker (opposite of damageDir)
+    const bx = -damageDir.x * S.DAMAGE_BLUR_DISTANCE * blurRatio
+    const by = -damageDir.y * S.DAMAGE_BLUR_DISTANCE * blurRatio
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 3
+      ctx.globalAlpha = 0.06 * blurRatio * (1 - t * 0.4)
+      ctx.fillStyle = `rgba(200,0,0,1)`
+      ctx.fillRect(bx * t, by * t, w, h)
+    }
+    ctx.globalAlpha = 1
+  }
+}
+
 function drawLastStandEffect(ctx: CanvasRenderingContext2D, timer: number, w: number, h: number): void {
   const progress = timer / S.LAST_STAND_SLOW_MO_DURATION
   const now = Date.now()
@@ -1283,6 +1758,148 @@ function drawLastStandEffect(ctx: CanvasRenderingContext2D, timer: number, w: nu
 
   ctx.textAlign = 'left'
   ctx.shadowBlur = 0
+}
+
+function drawConsumableEffect(
+  ctx: CanvasRenderingContext2D,
+  active: { type: ConsumableType; timer: number },
+  w: number,
+  h: number,
+): void {
+  switch (active.type) {
+    case 'nuke': {
+      const alpha = Math.min(1, active.timer * 2) * 0.45
+      ctx.fillStyle = `rgba(255, 100, 20, ${alpha})`
+      ctx.fillRect(0, 0, w, h)
+      // "NUKE!" text flash
+      if (active.timer > 0.25) {
+        const textAlpha = (active.timer - 0.25) / 0.25
+        ctx.fillStyle = `rgba(255, 200, 50, ${textAlpha})`
+        ctx.shadowColor = '#ff6622'
+        ctx.shadowBlur = 30
+        ctx.font = 'bold 48px monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText('NUKE!', w / 2, h / 2)
+        ctx.shadowBlur = 0
+        ctx.textAlign = 'left'
+      }
+      break
+    }
+    case 'full_heal': {
+      const alpha = Math.min(1, active.timer * 1.5) * 0.35
+      ctx.fillStyle = `rgba(50, 255, 120, ${alpha})`
+      ctx.fillRect(0, 0, w, h)
+      // "HEALED!" text flash
+      if (active.timer > 0.4) {
+        const textAlpha = (active.timer - 0.4) / 0.4
+        ctx.fillStyle = `rgba(100, 255, 150, ${textAlpha})`
+        ctx.shadowColor = '#44ff88'
+        ctx.shadowBlur = 25
+        ctx.font = 'bold 44px monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText('HEALED!', w / 2, h / 2)
+        ctx.shadowBlur = 0
+        ctx.textAlign = 'left'
+      }
+      break
+    }
+    case 'invincibility': {
+      const now = Date.now()
+      const pulse = Math.sin(now * 0.008) * 0.5 + 0.5
+      ctx.strokeStyle = `rgba(50, 200, 255, ${0.35 + pulse * 0.35})`
+      ctx.lineWidth = 8
+      ctx.shadowColor = '#44ccff'
+      ctx.shadowBlur = 20
+      ctx.strokeRect(4, 4, w - 8, h - 8)
+      ctx.shadowBlur = 0
+      break
+    }
+  }
+}
+
+function drawConsumableHUD(
+  ctx: CanvasRenderingContext2D,
+  consumables: ConsumableType[],
+  consumableActive: { type: ConsumableType; timer: number } | null,
+  w: number,
+  h: number,
+): void {
+  const slotSize = 36
+  const slotGap = 5
+  // Position: bottom-right, above Level badge (which is at w-24, h-padding-58)
+  const startX = w - 24 - slotSize
+  const startY = h - 145
+
+  // Show "Q" label if there are consumables
+  if (consumables.length > 0) {
+    ctx.font = '9px monospace'
+    ctx.textAlign = 'right'
+    ctx.fillStyle = '#ffffff55'
+    ctx.fillText('[Q]', startX + slotSize, startY - 4)
+    ctx.textAlign = 'left'
+  }
+
+  consumables.forEach((type, i) => {
+    const x = startX - i * (slotSize + slotGap)
+    const y = startY
+    const { color, label } = getConsumableStyle(type)
+
+    // Background
+    ctx.fillStyle = color + '22'
+    ctx.strokeStyle = color + 'bb'
+    ctx.lineWidth = 1.5
+    roundRect(ctx, x, y, slotSize, slotSize, 6)
+    ctx.fill()
+    ctx.stroke()
+
+    // Icon
+    ctx.font = 'bold 18px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillStyle = color
+    ctx.shadowColor = color
+    ctx.shadowBlur = 8
+    ctx.fillText(label, x + slotSize / 2, y + slotSize / 2 + 7)
+    ctx.shadowBlur = 0
+
+    // Stack number (if more than 1)
+    if (consumables.length > 1 && i === 0) {
+      ctx.font = 'bold 10px monospace'
+      ctx.fillStyle = '#ffffffcc'
+      ctx.fillText(`${consumables.length}`, x + slotSize - 7, y + 11)
+    }
+  })
+
+  // Active effect indicator (e.g., invincibility timer bar)
+  if (consumableActive && consumableActive.type === 'invincibility') {
+    const { color } = getConsumableStyle('invincibility')
+    const barW = slotSize
+    const barH = 4
+    const x = startX
+    const y = startY + slotSize + 4
+    const maxTimer = 3.0
+    const ratio = Math.max(0, consumableActive.timer / maxTimer)
+
+    ctx.fillStyle = '#ffffff22'
+    roundRect(ctx, x, y, barW, barH, 2)
+    ctx.fill()
+
+    ctx.fillStyle = color
+    ctx.shadowColor = color
+    ctx.shadowBlur = 6
+    roundRect(ctx, x, y, barW * ratio, barH, 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+  }
+
+  ctx.textAlign = 'left'
+}
+
+function getConsumableStyle(type: ConsumableType): { color: string; label: string } {
+  switch (type) {
+    case 'nuke': return { color: '#ff6622', label: '\u2622' }
+    case 'full_heal': return { color: '#44ff88', label: '\u271a' }
+    case 'invincibility': return { color: '#44ccff', label: '\u25c6' }
+  }
 }
 
 function drawGameOver(
@@ -1409,12 +2026,38 @@ function getTopDamageSource(damageByType: Record<EnemyType, number>): string {
 
 // ─── Mutator UI ─────────────────────────────────────────────────────────────
 
-function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[], w: number, h: number): void {
-  // Dark overlay
+function drawMutatorSelection(
+  ctx: CanvasRenderingContext2D,
+  choices: Mutator[],
+  activeMutators: Mutator[],
+  selectionTimer: number,
+  peekActive: boolean,
+  w: number,
+  h: number,
+): void {
+  const now = Date.now()
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
+
+  // Dark overlay with cosmic star field
   ctx.fillStyle = 'rgba(0, 0, 0, 0.88)'
   ctx.fillRect(0, 0, w, h)
 
-  // Title
+  // Ambient star particles
+  for (let i = 0; i < 30; i++) {
+    const sx = ((Math.sin(now * 0.0002 + i * 2.7) + 1) / 2) * w
+    const sy = ((Math.cos(now * 0.00015 + i * 1.9) + 1) / 2) * h
+    const sa = Math.sin(now * 0.001 + i * 0.8) * 0.15 + 0.15
+    ctx.globalAlpha = sa
+    ctx.fillStyle = '#7b2fff'
+    ctx.beginPath()
+    ctx.arc(sx, sy, i % 4 === 0 ? 2 : 1, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+
+  // Title (fades in)
+  const titleAlpha = Math.min(1, selectionTimer / 0.3)
+  ctx.globalAlpha = titleAlpha
   ctx.fillStyle = '#7b2fff'
   ctx.shadowColor = '#7b2fff'
   ctx.shadowBlur = 30
@@ -1422,11 +2065,12 @@ function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[],
   ctx.textAlign = 'center'
   ctx.fillText('CHOOSE YOUR MUTATOR', w / 2, 90)
   ctx.shadowBlur = 0
+  ctx.globalAlpha = 1
 
   // Subtitle
-  ctx.fillStyle = '#ffffff66'
+  ctx.fillStyle = `rgba(255,255,255,${titleAlpha * 0.4})`
   ctx.font = '14px monospace'
-  ctx.fillText('Press 1, 2, or 3 to select', w / 2, 120)
+  ctx.fillText('Press 1, 2, or 3 to select  ·  Hold Tab to peek your build', w / 2, 120)
 
   // Card dimensions
   const cardWidth = 300
@@ -1434,7 +2078,7 @@ function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[],
   const cardSpacing = 40
   const totalWidth = choices.length * cardWidth + (choices.length - 1) * cardSpacing
   const startX = (w - totalWidth) / 2
-  const cardY = (h - cardHeight) / 2 + 20
+  const baseCardY = (h - cardHeight) / 2 + 20
 
   // Rarity colors
   const rarityBgColors: Record<string, string> = {
@@ -1451,6 +2095,25 @@ function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[],
   for (let i = 0; i < choices.length; i++) {
     const mutator = choices[i]
     const cardX = startX + i * (cardWidth + cardSpacing)
+
+    // Float-in animation: slides up from below over first 0.4s
+    const floatProgress = easeOut(Math.min(1, selectionTimer / 0.4))
+    const floatOffset = (1 - floatProgress) * 120
+    // Gentle oscillation after landing
+    const oscillate = floatProgress >= 1 ? Math.sin(now * 0.001 + i * 2.1) * 3 : 0
+    const cardY = baseCardY + floatOffset + oscillate
+
+    ctx.globalAlpha = floatProgress
+
+    // Radial glow behind card
+    const glowGrad = ctx.createRadialGradient(
+      cardX + cardWidth / 2, cardY + cardHeight / 2, 0,
+      cardX + cardWidth / 2, cardY + cardHeight / 2, cardWidth * 0.8,
+    )
+    glowGrad.addColorStop(0, mutator.color + '18')
+    glowGrad.addColorStop(1, 'transparent')
+    ctx.fillStyle = glowGrad
+    ctx.fillRect(cardX - 30, cardY - 30, cardWidth + 60, cardHeight + 60)
 
     // Card background
     ctx.fillStyle = rarityBgColors[mutator.rarity]
@@ -1487,6 +2150,23 @@ function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[],
       ctx.fillText(lines[j], cardX + cardWidth / 2, cardY + 165 + j * 20)
     }
 
+    // Synergy hint — highlight if active build contains a synergizing mutator
+    const activeIds = new Set(activeMutators.map(m => m.id))
+    const synergyMatches = (mutator.synergizes ?? []).filter(id => activeIds.has(id))
+    if (synergyMatches.length > 0) {
+      const synergyNames = synergyMatches.map(id => {
+        const m = activeMutators.find(am => am.id === id)
+        return m ? m.name : id
+      })
+      const synergyY = cardY + 165 + lines.length * 20 + 20
+      ctx.font = 'bold 11px monospace'
+      ctx.fillStyle = '#ffee44'
+      ctx.shadowColor = '#ffee44'
+      ctx.shadowBlur = 8
+      ctx.fillText(`⚡ Synergy: ${synergyNames.join(', ')}`, cardX + cardWidth / 2, synergyY)
+      ctx.shadowBlur = 0
+    }
+
     // Key prompt
     ctx.font = 'bold 28px monospace'
     ctx.fillStyle = mutator.color
@@ -1494,9 +2174,58 @@ function drawMutatorSelection(ctx: CanvasRenderingContext2D, choices: Mutator[],
     ctx.shadowBlur = 12
     ctx.fillText(`[${i + 1}]`, cardX + cardWidth / 2, cardY + cardHeight - 30)
     ctx.shadowBlur = 0
+
+    ctx.globalAlpha = 1
   }
 
+  ctx.globalAlpha = 1
   ctx.textAlign = 'left'
+
+  // Peek sidebar — current build overview
+  if (peekActive && activeMutators.length > 0) {
+    const sideW = 220
+    const sideX = w - sideW - 16
+    const sideY = 60
+    const sideH = Math.min(h - 100, activeMutators.length * 52 + 50)
+
+    ctx.fillStyle = 'rgba(0,0,0,0.82)'
+    ctx.strokeStyle = '#7b2fff66'
+    ctx.lineWidth = 1
+    roundRect(ctx, sideX, sideY, sideW, sideH, 10)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.fillStyle = '#7b2fff'
+    ctx.font = 'bold 11px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('YOUR BUILD', sideX + sideW / 2, sideY + 18)
+
+    for (let i = 0; i < activeMutators.length; i++) {
+      const m = activeMutators[i]
+      const iy = sideY + 32 + i * 52
+      ctx.fillStyle = m.color + '22'
+      ctx.strokeStyle = m.color + '55'
+      ctx.lineWidth = 1
+      roundRect(ctx, sideX + 8, iy, sideW - 16, 44, 6)
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.font = '18px monospace'
+      ctx.textAlign = 'left'
+      ctx.fillStyle = m.color
+      ctx.fillText(m.icon, sideX + 14, iy + 27)
+
+      ctx.font = 'bold 11px monospace'
+      ctx.fillStyle = '#ffffffcc'
+      ctx.fillText(m.name, sideX + 38, iy + 16)
+
+      ctx.font = '9px monospace'
+      ctx.fillStyle = '#ffffff55'
+      const desc = m.description.length > 28 ? m.description.slice(0, 26) + '…' : m.description
+      ctx.fillText(desc, sideX + 38, iy + 30)
+    }
+    ctx.textAlign = 'left'
+  }
 }
 
 function drawActiveMutators(ctx: CanvasRenderingContext2D, mutators: Mutator[], w: number, h: number): void {
@@ -1623,13 +2352,48 @@ function drawContractBanner(ctx: CanvasRenderingContext2D, contractState: Contra
 
   ctx.fillText(progressText, bannerX + 10, bannerY + bannerH - 10)
 
-  // Reward preview (right side)
+  // Failure penalty badge (top-right, shown when active)
+  if (status === 'active' && contract.failurePenalty === 'drop_to_1hp') {
+    const penaltyLabel = '⚠ 1HP'
+    ctx.font = 'bold 9px monospace'
+    const penW = ctx.measureText(penaltyLabel).width + 10
+    const penX = bannerX + bannerW - penW - 8
+    const penY = bannerY + 6
+    ctx.fillStyle = 'rgba(255, 60, 60, 0.15)'
+    ctx.strokeStyle = '#ff4444aa'
+    ctx.lineWidth = 1
+    roundRect(ctx, penX, penY, penW, 16, 3)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#ff6666'
+    ctx.textAlign = 'center'
+    ctx.fillText(penaltyLabel, penX + penW / 2, penY + 11)
+    ctx.textAlign = 'left'
+  }
+
+  // Failed penalty reminder
+  if (status === 'failed' && contract.failurePenalty === 'drop_to_1hp') {
+    ctx.font = 'bold 9px monospace'
+    ctx.fillStyle = '#ff4444cc'
+    ctx.textAlign = 'right'
+    ctx.fillText('→ 1HP', bannerX + bannerW - 10, bannerY + bannerH - 10)
+    ctx.textAlign = 'left'
+  }
+
+  // Reward preview (right side, shown when active)
   if (status === 'active') {
     ctx.font = '10px monospace'
     ctx.textAlign = 'right'
     ctx.fillStyle = '#ffffff44'
-    const rewardText = `+${contract.scoreBonus} | +${contract.hpRestore}HP | +${contract.energyRestore}E`
+    let rewardText = `+${contract.scoreBonus} | +${contract.hpRestore}HP | +${contract.energyRestore}E`
+    if (contract.consumableReward) {
+      const icons: Record<string, string> = { nuke: '\u2622', full_heal: '\u271a', invincibility: '\u25c6' }
+      const icon = icons[contract.consumableReward] ?? '?'
+      rewardText += ` | ${icon}`
+      ctx.fillStyle = '#ffffffcc'
+    }
     ctx.fillText(rewardText, bannerX + bannerW - 10, bannerY + bannerH - 10)
+    ctx.textAlign = 'left'
   }
 
   ctx.textAlign = 'left'
@@ -1684,6 +2448,136 @@ function drawAffixAura(ctx: CanvasRenderingContext2D, enemy: Enemy, affix: WaveA
 
   // Small icon above enemy
   drawAffixIcon(ctx, affix, enemy.size)
+}
+
+function drawAffixTransform(ctx: CanvasRenderingContext2D, enemy: Enemy, affix: WaveAffix, now: number): void {
+  const s = enemy.size
+
+  switch (affix.id) {
+    case 'armored': {
+      // 6 angular shield plates rotating slowly around enemy
+      const plateCount = 6
+      const rot = now * 0.0003
+      ctx.strokeStyle = '#8888aa88'
+      ctx.lineWidth = 3
+      for (let i = 0; i < plateCount; i++) {
+        const angle = rot + (i / plateCount) * Math.PI * 2
+        const px = Math.cos(angle) * (s + 4)
+        const py = Math.sin(angle) * (s + 4)
+        const perpA = angle + Math.PI / 2
+        const pw = 7
+        ctx.fillStyle = `rgba(136,136,170,0.28)`
+        ctx.beginPath()
+        ctx.moveTo(px + Math.cos(perpA) * pw, py + Math.sin(perpA) * pw)
+        ctx.lineTo(px - Math.cos(perpA) * pw, py - Math.sin(perpA) * pw)
+        ctx.lineTo(
+          (px - Math.cos(perpA) * pw) + Math.cos(angle) * 5,
+          (py - Math.sin(perpA) * pw) + Math.sin(angle) * 5,
+        )
+        ctx.lineTo(
+          (px + Math.cos(perpA) * pw) + Math.cos(angle) * 5,
+          (py + Math.sin(perpA) * pw) + Math.sin(angle) * 5,
+        )
+        ctx.closePath()
+        ctx.fill()
+        ctx.stroke()
+      }
+      break
+    }
+    case 'volatile': {
+      // 10 flickering flame tongues
+      const flameCount = 10
+      for (let i = 0; i < flameCount; i++) {
+        const baseAngle = (i / flameCount) * Math.PI * 2
+        const flicker = Math.sin(now * 0.015 + i * 0.8) * 0.4 + 0.6
+        const fh = (8 + flicker * 10)
+        const fx = Math.cos(baseAngle) * (s + 2)
+        const fy = Math.sin(baseAngle) * (s + 2)
+        const tipX = fx + Math.cos(baseAngle) * fh
+        const tipY = fy + Math.sin(baseAngle) * fh
+        const grad = ctx.createLinearGradient(fx, fy, tipX, tipY)
+        grad.addColorStop(0, `rgba(255,68,68,${0.5 * flicker})`)
+        grad.addColorStop(0.6, `rgba(255,170,34,${0.35 * flicker})`)
+        grad.addColorStop(1, 'transparent')
+        ctx.fillStyle = grad
+        ctx.beginPath()
+        ctx.moveTo(fx, fy)
+        ctx.lineTo(
+          fx + Math.cos(baseAngle + 0.5) * (fh * 0.4),
+          fy + Math.sin(baseAngle + 0.5) * (fh * 0.4),
+        )
+        ctx.lineTo(tipX, tipY)
+        ctx.lineTo(
+          fx + Math.cos(baseAngle - 0.5) * (fh * 0.4),
+          fy + Math.sin(baseAngle - 0.5) * (fh * 0.4),
+        )
+        ctx.closePath()
+        ctx.fill()
+      }
+      break
+    }
+    case 'berserker': {
+      // 2 pulsing aura rings (alternating phase), faster when berserking
+      const speed = enemy.affixState.isBerserking ? 0.008 : 0.004
+      for (let r = 0; r < 2; r++) {
+        const phase = r * Math.PI
+        const ringPulse = Math.sin(now * speed + phase) * 0.3 + 0.5
+        ctx.strokeStyle = `rgba(255,34,102,${ringPulse * 0.7})`
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.arc(0, 0, s + 6 + r * 5 + ringPulse * 3, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      break
+    }
+    case 'swift': {
+      // Motion trail lines behind enemy in movement direction
+      const vx = enemy.vel.x
+      const vy = enemy.vel.y
+      const speed2 = Math.sqrt(vx * vx + vy * vy)
+      if (speed2 > 10) {
+        const nx = -vx / speed2
+        const ny = -vy / speed2
+        for (let t = 1; t <= 4; t++) {
+          const tx = nx * t * 8
+          const ty = ny * t * 8
+          ctx.strokeStyle = `rgba(34,255,170,${0.25 - t * 0.05})`
+          ctx.lineWidth = s * 0.4
+          ctx.lineCap = 'round'
+          ctx.beginPath()
+          ctx.moveTo(tx - nx * 4, ty - ny * 4)
+          ctx.lineTo(tx + nx * 4, ty + ny * 4)
+          ctx.stroke()
+        }
+      }
+      break
+    }
+    case 'regenerating': {
+      // Green wisps floating upward
+      for (let i = 0; i < 6; i++) {
+        const wispAngle = (i / 6) * Math.PI * 2
+        const drift = now * 0.001 + i * 1.1
+        const wx = Math.cos(wispAngle) * (s + 4) + Math.sin(drift) * 4
+        const wy = Math.sin(wispAngle) * (s + 4) - ((drift % (Math.PI * 2)) / (Math.PI * 2)) * 16
+        const wa = 0.5 - ((drift % (Math.PI * 2)) / (Math.PI * 2)) * 0.4
+        ctx.fillStyle = `rgba(68,255,136,${Math.max(0, wa)})`
+        ctx.beginPath()
+        ctx.arc(wx, wy, 2.5, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      break
+    }
+    case 'frenzied': {
+      // Orange flicker ring on body — faster when attacking
+      const fFlicker = Math.sin(now * (enemy.isAttacking ? 0.02 : 0.01)) * 0.3 + 0.5
+      ctx.strokeStyle = `rgba(255,170,34,${fFlicker * 0.65})`
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(0, 0, s + 3, 0, Math.PI * 2)
+      ctx.stroke()
+      break
+    }
+  }
 }
 
 function drawAffixIcon(ctx: CanvasRenderingContext2D, affix: WaveAffix, enemySize: number): void {

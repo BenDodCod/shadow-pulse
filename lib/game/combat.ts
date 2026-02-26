@@ -22,6 +22,8 @@ export interface CombatResult {
   // Death recap tracking
   damageDealt: number          // How much damage was dealt to player this frame
   damageSourceType: EnemyType | null  // Which enemy type dealt the damage
+  // Damage feedback
+  damageDir: Vec2   // normalized direction from attacker to player
 }
 
 function angleDiff(a: number, b: number): number {
@@ -43,6 +45,7 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
     lastStandTriggered: false,
     damageDealt: 0,
     damageSourceType: null,
+    damageDir: vec2(0, 0),
   }
 
   if (player.attacking === 'none' || player.attackTime < 0.01) return result
@@ -71,27 +74,29 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
       attackArc = S.LIGHT_ARC
       attackDamage = Math.round((S.LIGHT_DAMAGE + (player.comboCount - 1) * 3) * lightDamageMult)
       attackKnockback = S.LIGHT_KNOCKBACK * knockbackMult
-      hitFreezeTime = S.HIT_FREEZE_TIME
+      hitFreezeTime = S.HIT_FREEZE_TAP
       shakeIntensity = S.CAMERA_SHAKE_INTENSITY
       shakeDuration = S.CAMERA_SHAKE_DURATION
       hitType = 'light'
       break
-    case 'heavy':
+    case 'heavy': {
+      const chargeRatio = Math.min(1, player.heavyChargeTime / S.HEAVY_CHARGE_TIME)
       attackRange = S.HEAVY_RANGE * heavyRangeMult
       attackArc = S.HEAVY_ARC
       attackDamage = Math.round(S.HEAVY_DAMAGE * heavyDamageMult)
       attackKnockback = S.HEAVY_KNOCKBACK * knockbackMult
-      hitFreezeTime = S.HIT_FREEZE_TIME * 2
+      hitFreezeTime = S.HIT_FREEZE_HEAVY_PARTIAL + chargeRatio * (S.HIT_FREEZE_HEAVY_FULL - S.HIT_FREEZE_HEAVY_PARTIAL)
       shakeIntensity = S.HEAVY_SHAKE_INTENSITY
       shakeDuration = S.HEAVY_SHAKE_DURATION
       hitType = 'heavy'
       break
+    }
     case 'pulse_wave':
       attackRange = S.PULSE_WAVE_RANGE * pulseRangeMult
       attackArc = S.PULSE_WAVE_ARC
       attackDamage = Math.round(S.PULSE_WAVE_DAMAGE * pulseDamageMult)
       attackKnockback = S.PULSE_WAVE_KNOCKBACK * knockbackMult
-      hitFreezeTime = S.HIT_FREEZE_TIME * 1.5
+      hitFreezeTime = S.HIT_FREEZE_PULSE
       shakeIntensity = S.HEAVY_SHAKE_INTENSITY
       shakeDuration = S.HEAVY_SHAKE_DURATION
       hitType = 'pulse'
@@ -146,6 +151,31 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
     result.hitFreeze = hitFreezeTime
     result.cameraShake = { intensity: shakeIntensity, duration: shakeDuration }
     player.energy = Math.min(player.maxEnergy, player.energy + result.energyGained)
+
+    // Heavy chain (chain_heavy mutator)
+    if (player.attacking === 'heavy' && (modifiers.heavyChainCount ?? 0) > 0) {
+      const chainCount = modifiers.heavyChainCount!
+      const chainDamage = Math.round(attackDamage * 0.6)
+      // Sort alive enemies by distance to player, skip those already in the arc
+      const chainTargets = enemies
+        .filter(e => e.isAlive)
+        .map(e => ({ enemy: e, dist: distance(player.pos, e.pos) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, chainCount)
+      for (const { enemy } of chainTargets) {
+        const knockDir = normalize(sub(enemy.pos, player.pos))
+        const killed = damageEnemy(enemy, chainDamage, knockDir, attackKnockback * 0.5)
+        if (killed) {
+          result.enemiesKilled++
+          result.killedEnemyTypes.push(enemy.type)
+        }
+        result.hitEffects.push({
+          pos: { x: (player.pos.x + enemy.pos.x) / 2, y: (player.pos.y + enemy.pos.y) / 2 },
+          type: 'heavy',
+          time: 0.25,
+        })
+      }
+    }
   }
 
   return result
@@ -220,6 +250,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
     lastStandTriggered: false,
     damageDealt: 0,
     damageSourceType: null,
+    damageDir: vec2(0, 0),
   }
 
   if (!player.isAlive) return result
@@ -234,6 +265,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
       case 'normal':
       case 'fast':
         if (dist < enemy.attackRange + S.PLAYER_SIZE) {
+          const prevDamaged = result.playerDamaged
           applyPlayerDamage(
             player,
             enemy.damage,
@@ -242,6 +274,9 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
             result,
             { intensity: 10, duration: 0.15 }
           )
+          if (!prevDamaged && result.playerDamaged) {
+            result.damageDir = normalize(sub(player.pos, enemy.pos))
+          }
         }
         break
 
@@ -254,6 +289,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
           if (proj > 0 && proj < enemy.attackRange) {
             const perpDist = Math.abs(toPlayer.x * shotDir.y - toPlayer.y * shotDir.x)
             if (perpDist < S.PLAYER_SIZE + 8) {
+              const prevDamaged = result.playerDamaged
               applyPlayerDamage(
                 player,
                 enemy.damage,
@@ -262,6 +298,9 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
                 result,
                 { intensity: 8, duration: 0.12 }
               )
+              if (!prevDamaged && result.playerDamaged) {
+                result.damageDir = shotDir
+              }
             }
           }
         }
@@ -271,6 +310,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
         // Shockwave
         if (enemy.shockwaveActive && dist < enemy.shockwaveRange + S.PLAYER_SIZE) {
           const knockDir = normalize(sub(player.pos, enemy.pos))
+          const prevDamaged = result.playerDamaged
           applyPlayerDamage(
             player,
             enemy.damage,
@@ -280,6 +320,9 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
             { intensity: 15, duration: 0.25 },
             scale(knockDir, 400)
           )
+          if (!prevDamaged && result.playerDamaged) {
+            result.damageDir = knockDir
+          }
         }
         break
     }

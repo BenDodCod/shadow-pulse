@@ -5,6 +5,7 @@ import { rng } from './seeded-rng'
 
 export type ContractId = string
 export type ContractDifficulty = 'easy' | 'medium' | 'hard'
+export type ConsumableType = 'nuke' | 'full_heal' | 'invincibility'
 
 export interface WaveContract {
   id: ContractId
@@ -17,6 +18,8 @@ export interface WaveContract {
   scoreBonus: number
   hpRestore: number
   energyRestore: number
+  failurePenalty?: 'none' | 'drop_to_1hp'
+  consumableReward?: ConsumableType
 }
 
 export interface ContractProgress {
@@ -38,6 +41,7 @@ export interface ContractState {
   contract: WaveContract | null
   progress: ContractProgress
   status: 'active' | 'completed' | 'failed'
+  penaltyApplied: boolean
 }
 
 // ============================================================================
@@ -86,6 +90,7 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 350,
     hpRestore: 10,
     energyRestore: 15,
+    failurePenalty: 'drop_to_1hp',
   },
   {
     id: 'untouchable',
@@ -96,6 +101,7 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 350,
     hpRestore: 15,
     energyRestore: 20,
+    failurePenalty: 'drop_to_1hp',
   },
   {
     id: 'speed_demon',
@@ -106,6 +112,7 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 300,
     hpRestore: 8,
     energyRestore: 15,
+    failurePenalty: 'drop_to_1hp',
   },
   {
     id: 'combo_chain',
@@ -116,6 +123,7 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 300,
     hpRestore: 8,
     energyRestore: 15,
+    failurePenalty: 'drop_to_1hp',
   },
 
   // === HARD CONTRACTS ===
@@ -129,6 +137,8 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 500,
     hpRestore: 15,
     energyRestore: 25,
+    failurePenalty: 'drop_to_1hp',
+    consumableReward: 'nuke',
   },
   {
     id: 'perfect_rush',
@@ -139,6 +149,8 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 500,
     hpRestore: 20,
     energyRestore: 30,
+    failurePenalty: 'drop_to_1hp',
+    consumableReward: 'invincibility',
   },
   {
     id: 'combo_master',
@@ -149,6 +161,8 @@ export const CONTRACT_POOL: WaveContract[] = [
     scoreBonus: 450,
     hpRestore: 12,
     energyRestore: 20,
+    failurePenalty: 'drop_to_1hp',
+    consumableReward: 'full_heal',
   },
 ]
 
@@ -178,6 +192,7 @@ export function createContractState(): ContractState {
     contract: null,
     progress: createContractProgress(),
     status: 'active',
+    penaltyApplied: false,
   }
 }
 

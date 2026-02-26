@@ -91,6 +91,10 @@ export interface InputState {
   heavyRelease: boolean
   pulseWave: boolean
   timeFlicker: boolean
+  mutatorPeek?: boolean
+  consumableActivate?: boolean
+  acceptWaveEvent?: boolean
+  rejectWaveEvent?: boolean
 }
 
 export function getMovementDirection(input: InputState): Vec2 {

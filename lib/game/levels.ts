@@ -4,10 +4,28 @@
 
 export type ThemeKey = 'void' | 'inferno' | 'cryo' | 'storm' | 'abyss' | 'apocalypse'
 
+export interface Hazard {
+  type: 'floor_zone' | 'wall_trap' | 'pulse_center'
+  pos: { x: number; y: number }
+  radius: number
+  active: boolean
+  timer: number      // seconds until next toggle
+  onDuration: number
+  offDuration: number
+  color: string
+  // wall_trap only: angle facing the arena center (set in generateHazards)
+  trapAngle?: number
+}
+
 export interface Obstacle {
     x: number
     y: number
     radius: number
+    // Destructible pillar state
+    hp: number
+    maxHp: number
+    state: 'intact' | 'cracked' | 'rubble'
+    rubbleRadius: number
 }
 
 export interface LevelTheme {
@@ -172,12 +190,61 @@ export function generateObstacles(theme: LevelTheme, centerX: number, centerY: n
     for (let i = 0; i < count; i++) {
         const angle = (i / count) * Math.PI * 2 + rng(theme.level * 10 + i) * 0.5
         const dist = theme.arenaRadius * (0.35 + rng(theme.level * 7 + i * 3) * 0.25)
+        const r = 18 + rng(theme.level * 13 + i * 5) * 12
         obstacles.push({
             x: centerX + Math.cos(angle) * dist,
             y: centerY + Math.sin(angle) * dist,
-            radius: 18 + rng(theme.level * 13 + i * 5) * 12,
+            radius: r,
+            hp: 30,
+            maxHp: 30,
+            state: 'intact',
+            rubbleRadius: Math.max(8, r * 0.35),
         })
     }
 
     return obstacles
+}
+
+export function generateHazards(theme: LevelTheme, cx: number, cy: number): Hazard[] {
+    function makeZone(ox: number, oy: number, r: number, onD: number, offD: number, timerOffset: number, color: string): Hazard {
+        return { type: 'floor_zone', pos: { x: cx + ox, y: cy + oy }, radius: r, active: false, timer: timerOffset, onDuration: onD, offDuration: offD, color }
+    }
+    function makeTrap(ox: number, oy: number, timerOffset: number, color: string): Hazard {
+        const px = cx + ox, py = cy + oy
+        return { type: 'wall_trap', pos: { x: px, y: py }, radius: 18, active: true, timer: timerOffset, onDuration: 0.25, offDuration: 2.5, color, trapAngle: Math.atan2(cy - py, cx - px) }
+    }
+    function makePulse(r: number, timerOffset: number, color: string): Hazard {
+        return { type: 'pulse_center', pos: { x: cx, y: cy }, radius: r, active: false, timer: timerOffset, onDuration: 0.6, offDuration: 5.0, color }
+    }
+
+    switch (theme.themeKey) {
+        case 'inferno':
+            return [
+                makeZone(-90, 70, 55, 3.0, 2.0, 2.0, '#ff4400'),
+                makeZone(90, -70, 55, 3.0, 2.0, 0.5, '#ff4400'),
+            ]
+        case 'storm':
+            return [
+                makeTrap(-200, 0, 2.5, '#ffee00'),
+                makeTrap(200, 0, 1.25, '#ffee00'),
+                makePulse(210, 4.5, '#ffee00'),
+            ]
+        case 'abyss':
+            return [
+                makeZone(-110, 0, 52, 3.5, 2.0, 1.5, '#cc00ff'),
+                makeZone(110, 0, 52, 3.5, 2.0, 3.0, '#cc00ff'),
+                makeZone(0, -110, 52, 3.5, 2.0, 0.0, '#cc00ff'),
+                makeTrap(-210, 90, 1.8, '#aa00cc'),
+            ]
+        case 'apocalypse':
+            return [
+                makeZone(-120, 90, 52, 3.0, 2.0, 1.0, '#ff0040'),
+                makeZone(120, -90, 52, 3.0, 2.0, 2.5, '#ff0040'),
+                makeTrap(-225, -80, 1.8, '#ff2255'),
+                makeTrap(225, 80, 0.6, '#ff2255'),
+                makePulse(230, 4.0, '#ff0040'),
+            ]
+        default:
+            return []
+    }
 }

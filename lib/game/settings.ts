@@ -74,6 +74,20 @@ export const TIME_FLICKER_SLOW = 0.15
 
 // Hit Feel
 export const HIT_FREEZE_TIME = 0.045
+// Slash Trails
+export const SLASH_TRAIL_DURATION = 0.15         // seconds trail lingers
+export const SLASH_AFTER_IMAGE_ALPHA = 0.35       // ghost player opacity
+export const SLASH_RIBBON_WIDTH = 6               // energy ribbon px
+
+// Damage Feedback
+export const DAMAGE_VIGNETTE_DURATION = 0.35   // seconds
+export const DAMAGE_BLUR_DURATION = 0.12        // directional blur duration
+export const DAMAGE_BLUR_DISTANCE = 18          // max pixel offset for blur effect
+
+export const HIT_FREEZE_TAP = 0.03             // light attack micro freeze
+export const HIT_FREEZE_HEAVY_PARTIAL = 0.07   // partially charged heavy
+export const HIT_FREEZE_HEAVY_FULL = 0.16      // fully charged heavy (160ms)
+export const HIT_FREEZE_PULSE = 0.09           // pulse wave
 export const CAMERA_SHAKE_INTENSITY = 6
 export const CAMERA_SHAKE_DURATION = 0.12
 export const HEAVY_SHAKE_INTENSITY = 12
@@ -139,6 +153,18 @@ export const DEATH_HINTS: Record<string, string> = {
   fast: "Fast enemies dodge light attacks. Use heavy or pulse wave to catch them!",
   none: "Keep practicing! Use dash (Space/Shift) to avoid damage.",
 }
+
+// Pillars
+export const PILLAR_HP = 30
+
+// Arena Hazards
+export const HAZARD_ZONE_DAMAGE = 8         // damage per second while standing in zone
+export const HAZARD_PULSE_DAMAGE = 15       // instant damage when pulse fires
+export const HAZARD_TRAP_DAMAGE = 12        // instant damage from wall trap
+export const HAZARD_TRAP_RANGE = 220        // max range wall trap can hit player
+export const SHRINK_START_WAVE = 10         // wave to start arena shrink
+export const SHRINK_RATE = 1.5             // px per second
+export const SHRINK_MIN_RADIUS = 210        // minimum arena radius
 
 // Waves
 export const WAVE_DELAY = 3.0

@@ -3,6 +3,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { GameState, createGameState, updateGame, renderGame, resetGame } from '@/lib/game/engine'
 import { InputState } from '@/lib/game/player'
+import { audio } from '@/lib/game/audio'
 import { GAME_WIDTH, GAME_HEIGHT } from '@/lib/game/settings'
 import { DailyEntry } from '@/lib/game/renderer'
 import {
@@ -36,6 +37,10 @@ export default function ShadowPulseGame() {
     heavyRelease: false,
     pulseWave: false,
     timeFlicker: false,
+    mutatorPeek: false,
+    consumableActivate: false,
+    acceptWaveEvent: false,
+    rejectWaveEvent: false,
   })
   const keysRef = useRef<Set<string>>(new Set())
   const animFrameRef = useRef<number>(0)
@@ -45,6 +50,8 @@ export default function ShadowPulseGame() {
   const scoreSubmittedRef = useRef(false)
 
   const startGame = useCallback((isDailyChallenge = false) => {
+    audio.init()
+    audio.resume()
     gameStateRef.current = createGameState(isDailyChallenge)
     scoreSubmittedRef.current = false
     setDailyLeaderboard([])
@@ -57,6 +64,7 @@ export default function ShadowPulseGame() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault()
+      audio.resume()
       const key = e.key.toLowerCase()
       const wasPressed = keysRef.current.has(key)
       keysRef.current.add(key)
@@ -106,6 +114,24 @@ export default function ShadowPulseGame() {
         }
       }
 
+      // Mutator peek (Tab)
+      if (key === 'tab' && !wasPressed) {
+        inputRef.current.mutatorPeek = true
+      }
+
+      // Consumable activate (Q)
+      if (key === 'q' && !wasPressed) {
+        input.consumableActivate = true
+      }
+
+      // Wave event Y/N
+      if (key === 'y' && !wasPressed) {
+        input.acceptWaveEvent = true
+      }
+      if (key === 'n' && !wasPressed) {
+        input.rejectWaveEvent = true
+      }
+
       // Restart
       if (key === 'r' && gameStateRef.current?.gameOver) {
         const wasDaily = gameStateRef.current.isDailyChallenge
@@ -129,6 +155,10 @@ export default function ShadowPulseGame() {
       if (key === 'k') {
         input.heavyAttack = false
         input.heavyRelease = true
+      }
+
+      if (key === 'tab') {
+        input.mutatorPeek = false
       }
     }
 
@@ -173,6 +203,9 @@ export default function ShadowPulseGame() {
       inputRef.current.heavyRelease = false
       inputRef.current.pulseWave = false
       inputRef.current.timeFlicker = false
+      inputRef.current.consumableActivate = false
+      inputRef.current.acceptWaveEvent = false
+      inputRef.current.rejectWaveEvent = false
 
       // Submit daily score on game over (once)
       if (state.gameOver && state.isDailyChallenge && !scoreSubmittedRef.current) {
