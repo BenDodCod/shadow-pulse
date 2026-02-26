@@ -188,3 +188,11 @@ export const DAMAGE_NUMBER_COLORS: Record<string, string> = {
   heavy: '#ffaa22',
   pulse: '#44ccff',
 }
+
+// ── Hebrew Classroom Educational Layer ───────────────────────────────────────
+export const QUESTION_FEEDBACK_DURATION = 2000   // ms to show correct answer after wrong attempt
+export const KEYBOARD_PANEL_FADE_DELAY = 30000   // ms before panel fades (Grade 3-4)
+export const LETTER_FLASH_LIFETIME = 1.2         // seconds letter flash visible
+export const KEYBOARD_PANEL_GRADES = [1, 2, 3, 4] // grades that show the keyboard panel
+export const LETTER_FLASH_GRADES = [1, 2, 3, 4]   // grades that show letter flashes
+export const QUIZ_GRADES = [3, 4, 5, 6]            // grades that get the post-wave quiz

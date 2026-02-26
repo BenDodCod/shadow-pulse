@@ -8,6 +8,16 @@ import * as S from './settings'
 import { Mutator, computeCombinedModifiers } from './mutators'
 import { ContractState, ConsumableType, getContractProgressText, getDifficultyColor } from './contracts'
 import { WaveAffix } from './affixes'
+import { Question } from './questions'
+
+// Inline shape to avoid circular dependency with engine.ts
+interface LetterFlash {
+  letter: string
+  x: number
+  y: number
+  age: number
+  color: string
+}
 import { WaveEvent } from './waves'
 import { AssetCache } from './assetLoader'
 import { getAnimFrame } from './spriteAnimator'
@@ -76,6 +86,18 @@ export function render(
   surgeZone?: { x: number; y: number; radius: number } | null,
   assets?: AssetCache | null,
   damageNumbers?: Array<{ value: number; pos: { x: number; y: number }; vel: { x: number; y: number }; age: number; lifetime: number; color: string }>,
+  // Educational layer
+  quizEnabled?: boolean,
+  selectedGrade?: number,
+  hebrewLayoutActive?: boolean,
+  keyboardPanelTimer?: number,
+  letterFlashes?: LetterFlash[],
+  questionPhase?: boolean,
+  currentQuestion?: Question | null,
+  questionResult?: 'pending' | 'correct' | 'wrong-first' | 'wrong-final',
+  questionRetryAvailable?: boolean,
+  questionFeedbackTimer?: number,
+  pendingMutatorIndex?: number,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -126,6 +148,11 @@ export function render(
     drawDamageNumbers(ctx, damageNumbers)
   }
 
+  // Letter flashes (world space, inside camera transform — Classroom Mode only)
+  if (quizEnabled && letterFlashes && letterFlashes.length > 0) {
+    drawLetterFlashes(ctx, letterFlashes)
+  }
+
   // Restore camera transform for HUD
   ctx.restore()
 
@@ -142,6 +169,12 @@ export function render(
   // Consumable active effect (screen overlay)
   if (consumableActive) {
     drawConsumableEffect(ctx, consumableActive, w, h)
+  }
+
+  // Hebrew layout guide — full-screen blocking overlay (Classroom Mode only)
+  if (quizEnabled && hebrewLayoutActive) {
+    drawHebrewLayoutGuide(ctx, w, h)
+    return
   }
 
   // HUD
@@ -162,10 +195,23 @@ export function render(
     drawContractBanner(ctx, contractState, w)
   }
 
+  // Keyboard teaching panel (Grade 1–4)
+  const grade = selectedGrade ?? 1
+  if (quizEnabled && S.KEYBOARD_PANEL_GRADES.includes(grade)) {
+    drawKeyboardPanel(ctx, grade, wave, keyboardPanelTimer ?? 0, w, h)
+  }
+
   // Mutator selection screen (must be resolved before wave event is shown,
   // because the engine blocks on mutator input — Y/N won't fire until after)
   if (mutatorSelectionActive && mutatorChoices.length > 0) {
     drawMutatorSelection(ctx, mutatorChoices, activeMutators, mutatorSelectionTimer ?? 0, mutatorPeekActive ?? false, w, h)
+    return
+  }
+
+  // Vocabulary quiz — shown after mutator selection for Grade 3+ (Classroom Mode only)
+  if (quizEnabled && questionPhase && currentQuestion && S.QUIZ_GRADES.includes(grade)) {
+    const chosenMutator = mutatorChoices[pendingMutatorIndex ?? 0] ?? null
+    drawQuestionChallenge(ctx, currentQuestion, questionResult ?? 'pending', questionFeedbackTimer ?? 0, chosenMutator, w, h)
     return
   }
 
@@ -2842,4 +2888,429 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.lineTo(x, y + r)
   ctx.quadraticCurveTo(x, y, x + r, y)
   ctx.closePath()
+}
+
+// ─── Educational Layer — Draw Functions ──────────────────────────────────────
+
+/**
+ * Full-screen blocking overlay shown when Hebrew keyboard layout is detected.
+ * Purely visual — no Hebrew or English text needed.
+ */
+function drawHebrewLayoutGuide(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  const now = Date.now()
+
+  // 95% opaque dark overlay
+  ctx.fillStyle = 'rgba(8, 8, 18, 0.95)'
+  ctx.fillRect(0, 0, w, h)
+
+  // Keyboard emoji large centered
+  ctx.font = 'bold 80px serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('⌨️', w / 2, h / 2 - 100)
+
+  // Hebrew flag → arrow → English flag
+  ctx.font = 'bold 52px serif'
+  const flagY = h / 2 - 10
+  ctx.fillText('🇮🇱', w / 2 - 90, flagY)
+  ctx.font = 'bold 36px monospace'
+  ctx.fillStyle = '#ffffff88'
+  ctx.fillText('→', w / 2, flagY)
+  ctx.font = 'bold 52px serif'
+  ctx.fillText('🇺🇸', w / 2 + 90, flagY)
+
+  // ❌ on Hebrew flag, ✓ on English flag
+  ctx.font = 'bold 26px monospace'
+  ctx.fillStyle = '#ff4444'
+  ctx.fillText('✗', w / 2 - 90, flagY + 44)
+  ctx.fillStyle = '#44ff88'
+  ctx.fillText('✓', w / 2 + 90, flagY + 44)
+
+  // Physical key shapes for Alt + Shift / Win + Space, highlighted yellow
+  const keyY = h / 2 + 80
+  const keyPairs: Array<[string, string]> = [['Alt', 'Shift'], ['Win', 'Space']]
+  const pairWidth = 200
+  const startX = w / 2 - (keyPairs.length * pairWidth) / 2 + pairWidth / 2
+
+  for (let pi = 0; pi < keyPairs.length; pi++) {
+    const px = startX + pi * pairWidth
+    const [keyA, keyB] = keyPairs[pi]
+    const pulse = Math.sin(now * 0.005 + pi) * 0.3 + 0.7
+
+    // Separator "/"
+    if (pi > 0) {
+      ctx.font = 'bold 20px monospace'
+      ctx.fillStyle = '#ffffff33'
+      ctx.textAlign = 'center'
+      ctx.fillText('/', px - pairWidth / 2, keyY + 16)
+    }
+
+    for (let ki = 0; ki < 2; ki++) {
+      const kx = px - 46 + ki * 52
+      const kLabel = ki === 0 ? keyA : keyB
+      const kW = kLabel === 'Space' ? 72 : 50
+      const kH = 36
+
+      // Key background
+      ctx.fillStyle = `rgba(255, 220, 30, ${0.18 * pulse})`
+      ctx.strokeStyle = `rgba(255, 220, 30, ${0.8 * pulse})`
+      ctx.lineWidth = 2
+      roundRect(ctx, kx - kW / 2, keyY, kW, kH, 6)
+      ctx.fill()
+      ctx.stroke()
+
+      // Key label
+      ctx.font = `bold 14px monospace`
+      ctx.fillStyle = `rgba(255, 240, 120, ${pulse})`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(kLabel, kx, keyY + kH / 2)
+    }
+  }
+
+  // Instruction hint row at bottom
+  ctx.font = '16px monospace'
+  ctx.fillStyle = '#ffffff33'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('Switch to English keyboard layout to continue', w / 2, h / 2 + 160)
+}
+
+/**
+ * Small keyboard diagram in bottom-left corner (Grade 1–4).
+ * Shows progressive key unlock by wave number.
+ * Fades after KEYBOARD_PANEL_FADE_DELAY seconds for grade 3–4.
+ */
+function drawKeyboardPanel(
+  ctx: CanvasRenderingContext2D,
+  grade: number,
+  wave: number,
+  keyboardPanelTimer: number,
+  w: number,
+  h: number,
+): void {
+  // Determine alpha
+  let alpha = 1.0
+  if (grade >= 3) {
+    const fadeStart = S.KEYBOARD_PANEL_FADE_DELAY / 1000  // convert ms → s
+    if (keyboardPanelTimer >= fadeStart) {
+      alpha = 0
+    } else if (keyboardPanelTimer >= fadeStart - 0.5) {
+      alpha = (fadeStart - keyboardPanelTimer) / 0.5
+    }
+  }
+  if (alpha <= 0) return
+
+  ctx.save()
+  ctx.globalAlpha = alpha
+
+  const panelX = 12
+  const panelY = h - 130
+  const panelW = 310
+  const panelH = 115
+
+  // Panel background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
+  ctx.strokeStyle = '#7b2fff44'
+  ctx.lineWidth = 1
+  roundRect(ctx, panelX, panelY, panelW, panelH, 8)
+  ctx.fill()
+  ctx.stroke()
+
+  // Title
+  ctx.font = '10px monospace'
+  ctx.fillStyle = '#ffffff44'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  ctx.fillText('KEYBOARD', panelX + 8, panelY + 7)
+
+  // Progressive key unlock by wave
+  const unlocked: Record<string, boolean> = {
+    w: true, a: true, s: true, d: true,   // Wave 1
+    j: wave >= 2,                          // Wave 2
+    k: wave >= 3,                          // Wave 3
+    l: wave >= 4, ' ': wave >= 4,          // Wave 4
+    ';': wave >= 6,                        // Wave 6
+  }
+
+  const KEY_COLORS: Record<string, string> = {
+    w: '#88ff88', a: '#88ff88', s: '#88ff88', d: '#88ff88',
+    j: '#cc99ff', k: '#ffaa22', l: '#44ccff', ';': '#ffffff', ' ': '#ffdd44',
+  }
+  const KEY_LABELS: Record<string, string> = {
+    w: 'W', a: 'A', s: 'S', d: 'D',
+    j: 'J', k: 'K', l: 'L', ';': ';', ' ': 'SPC',
+  }
+  const ACTION_LABELS: Record<string, string> = {
+    w: 'Move', a: '', s: '', d: '',
+    j: 'Light', k: 'Heavy', l: 'Pulse', ';': 'Slow', ' ': 'Dash',
+  }
+
+  const keyOrder = ['w', 'a', 's', 'd', 'j', 'k', 'l', ';', ' ']
+  const kW = 28
+  const kH = 26
+  const startKeyX = panelX + 8
+  const rowY = panelY + 30
+  const spacing = 32
+
+  // Row 1: WASD  |  J K L ; SPC
+  const row1Keys = ['w', 'a', 's', 'd']
+  const row2Keys = ['j', 'k', 'l', ';', ' ']
+
+  const drawKey = (label: string, action: string, kx: number, ky: number, color: string, isUnlocked: boolean) => {
+    const kLabel = label
+    const kActual = label === 'SPC' ? 80 : label.length > 1 ? 40 : kW
+    ctx.fillStyle = isUnlocked ? color + '22' : '#ffffff08'
+    ctx.strokeStyle = isUnlocked ? color + 'cc' : '#ffffff22'
+    ctx.lineWidth = 1
+    roundRect(ctx, kx, ky, kActual, kH, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.font = `bold 11px monospace`
+    ctx.fillStyle = isUnlocked ? color : '#ffffff22'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(kLabel, kx + kActual / 2, ky + kH / 2)
+
+    if (action && isUnlocked) {
+      ctx.font = '8px monospace'
+      ctx.fillStyle = color + 'aa'
+      ctx.textAlign = 'center'
+      ctx.fillText(action, kx + kActual / 2, ky + kH + 8)
+    }
+  }
+
+  // Row 1: WASD
+  let rx = startKeyX
+  for (const k of row1Keys) {
+    drawKey(KEY_LABELS[k], ACTION_LABELS[k], rx, rowY, KEY_COLORS[k], unlocked[k])
+    rx += kW + 4
+  }
+
+  // Separator gap
+  rx += 8
+
+  // Row 2: J K L ; SPC
+  for (const k of row2Keys) {
+    const kLabel = KEY_LABELS[k]
+    const kW2 = kLabel === 'SPC' ? 44 : kW
+    drawKey(kLabel, ACTION_LABELS[k], rx, rowY, KEY_COLORS[k], unlocked[k])
+    rx += kW2 + 4
+  }
+
+  ctx.restore()
+}
+
+/**
+ * Large glowing letter that floats up and fades (like damage numbers).
+ * Called in world space (inside camera transform).
+ */
+function drawLetterFlashes(ctx: CanvasRenderingContext2D, flashes: LetterFlash[]): void {
+  for (const f of flashes) {
+    const t = f.age / S.LETTER_FLASH_LIFETIME   // 0→1
+    const alpha = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8
+    if (alpha <= 0) continue
+    const yOffset = -f.age * 55    // floats upward
+    const scale = 1 + t * 0.3      // slight grow
+
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.translate(f.x, f.y + yOffset)
+    ctx.scale(scale, scale)
+
+    // Glow shadow
+    ctx.shadowColor = f.color
+    ctx.shadowBlur = 20
+
+    ctx.font = `bold 72px monospace`
+    ctx.fillStyle = f.color
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(f.letter, 0, 0)
+
+    ctx.restore()
+  }
+}
+
+/**
+ * Full-screen blocking overlay for the post-wave vocabulary quiz (Grade 3+).
+ * Shows mini mutator card, English word + emoji + Hebrew hint, and A/B/C/D options.
+ */
+function drawQuestionChallenge(
+  ctx: CanvasRenderingContext2D,
+  question: Question,
+  result: 'pending' | 'correct' | 'wrong-first' | 'wrong-final',
+  feedbackTimer: number,
+  chosenMutator: Mutator | null,
+  w: number,
+  h: number,
+): void {
+  // Dark blocking overlay
+  ctx.fillStyle = 'rgba(5, 5, 15, 0.93)'
+  ctx.fillRect(0, 0, w, h)
+
+  const cx = w / 2
+  let y = 60
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  // Draw Hebrew and emoji in separate calls to avoid Canvas BiDi stray-glyph artefacts
+  ctx.font = 'bold 22px monospace'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = '#ffdd44'
+  ctx.shadowColor = '#ffdd44'
+  ctx.shadowBlur = 12
+  // Hebrew text only (pure RTL — no emoji mixed in)
+  ctx.textAlign = 'center'
+  ctx.fillText('ענה נכון — קבל את הכוח!', cx, y)
+  ctx.shadowBlur = 0
+  // Sparkle emojis drawn separately as LTR anchors
+  ctx.font = 'bold 20px serif'
+  ctx.textAlign = 'right'
+  ctx.fillText('✨', cx - 150, y + 2)
+  ctx.textAlign = 'left'
+  ctx.fillText('✨', cx + 150, y + 2)
+  y += 42
+
+  // ── Mini mutator card (if any) ─────────────────────────────────────────────
+  if (chosenMutator) {
+    const cardW = 320
+    const cardH = 60
+    const cardX = cx - cardW / 2
+    ctx.fillStyle = chosenMutator.color + '22'
+    ctx.strokeStyle = chosenMutator.color + 'cc'
+    ctx.lineWidth = 2
+    roundRect(ctx, cardX, y, cardW, cardH, 8)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.font = 'bold 15px monospace'
+    ctx.fillStyle = chosenMutator.color
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(chosenMutator.name, cx, y + 18)
+    ctx.font = '11px monospace'
+    ctx.fillStyle = '#ffffffaa'
+    ctx.fillText(chosenMutator.description.slice(0, 50), cx, y + 38)
+    y += cardH + 20
+  } else {
+    y += 20
+  }
+
+  // ── English word + emoji ──────────────────────────────────────────────────
+  // Draw emoji + word side-by-side, both at the same baseline
+  ctx.textBaseline = 'middle'
+  const wordY = y + 28
+
+  ctx.font = 'bold 32px serif'
+  ctx.fillStyle = '#ffffff'
+  ctx.textAlign = 'right'
+  ctx.fillText(question.emoji, cx - 6, wordY)
+
+  ctx.font = 'bold 36px monospace'
+  ctx.fillStyle = '#ffffff'
+  ctx.shadowColor = '#7b2fff'
+  ctx.shadowBlur = 16
+  ctx.textAlign = 'left'
+  ctx.fillText(`"${question.englishWord}"`, cx + 6, wordY)
+  ctx.shadowBlur = 0
+  y += 70
+
+  // ── Answer options (A/B/C/D) ───────────────────────────────────────────────
+  const optionLabels = ['A', 'B', 'C', 'D']
+  const optW = 180
+  const optH = 48
+  const gap = 14
+  const totalW = optW * 2 + gap
+  const optStartX = cx - totalW / 2
+
+  ctx.font = '14px monospace'
+  ctx.textBaseline = 'middle'
+
+  for (let i = 0; i < 4; i++) {
+    const col = i % 2
+    const row = Math.floor(i / 2)
+    const ox = optStartX + col * (optW + gap)
+    const oy = y + row * (optH + gap)
+    const label = optionLabels[i]
+    const text = question.options[i]
+
+    let bg = 'rgba(30, 20, 60, 0.8)'
+    let border = '#7b2fff88'
+    let textColor = '#ffffffcc'
+
+    if (result !== 'pending') {
+      if (i === question.correctIndex) {
+        bg = 'rgba(34, 180, 80, 0.25)'
+        border = '#22b450cc'
+        textColor = '#22ff88'
+      } else if (result === 'wrong-first' || result === 'wrong-final') {
+        bg = 'rgba(180, 34, 34, 0.1)'
+        border = '#ff222222'
+        textColor = '#ffffff44'
+      }
+    }
+
+    ctx.fillStyle = bg
+    ctx.strokeStyle = border
+    ctx.lineWidth = 2
+    roundRect(ctx, ox, oy, optW, optH, 8)
+    ctx.fill()
+    ctx.stroke()
+
+    // Option label letter
+    ctx.font = 'bold 16px monospace'
+    ctx.fillStyle = border
+    ctx.textAlign = 'left'
+    ctx.fillText(`[${label}]`, ox + 10, oy + optH / 2)
+
+    // Option text (Hebrew, RTL-ish drawn right-aligned)
+    ctx.font = '17px sans-serif'
+    ctx.fillStyle = textColor
+    ctx.textAlign = 'right'
+    ctx.fillText(text, ox + optW - 10, oy + optH / 2)
+  }
+
+  y += 2 * (optH + gap) + 24
+
+  // ── Key hint ──────────────────────────────────────────────────────────────
+  ctx.font = '14px monospace'
+  ctx.fillStyle = '#ffffff44'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillText('לחץ על  A · B · C · D', cx, y)
+  y += 30
+
+  // ── Feedback states ────────────────────────────────────────────────────────
+  if (result === 'correct') {
+    ctx.font = 'bold 22px monospace'
+    ctx.fillStyle = '#22ff88'
+    ctx.shadowColor = '#22ff88'
+    ctx.shadowBlur = 16
+    ctx.textAlign = 'center'
+    ctx.fillText('נכון! הכוח שלך! 🎉', cx, y)
+    ctx.shadowBlur = 0
+  } else if (result === 'wrong-first') {
+    ctx.font = 'bold 18px monospace'
+    ctx.fillStyle = '#ff6644'
+    ctx.textAlign = 'center'
+    ctx.fillText('טעות — נסה שוב, נשאר עוד ניסיון אחד', cx, y)
+    y += 28
+    // Timer bar
+    const barW = 300
+    const barFill = Math.max(0, feedbackTimer / S.QUESTION_FEEDBACK_DURATION)
+    ctx.fillStyle = '#ffffff22'
+    roundRect(ctx, cx - barW / 2, y, barW, 8, 4)
+    ctx.fill()
+    ctx.fillStyle = '#ff8844'
+    if (barFill > 0) {
+      roundRect(ctx, cx - barW / 2, y, barW * barFill, 8, 4)
+      ctx.fill()
+    }
+  } else if (result === 'wrong-final') {
+    ctx.font = 'bold 18px monospace'
+    ctx.fillStyle = '#ff4444'
+    ctx.textAlign = 'center'
+    ctx.fillText('טעות — אין כוח הפעם, לגל הבא!', cx, y)
+  }
 }

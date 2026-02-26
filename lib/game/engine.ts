@@ -1,4 +1,5 @@
 import { Player, createPlayer, updatePlayer, InputState, AttackType } from './player'
+import { Question, getQuestion } from './questions'
 import { Enemy, EnemyType, updateEnemy } from './enemy'
 import { distance, normalize, sub, scale, add } from './vec2'
 import { Camera, createCamera, shakeCamera, updateCamera } from './camera'
@@ -39,6 +40,14 @@ export interface DamageNumber {
   age: number
   lifetime: number
   color: string
+}
+
+export interface LetterFlash {
+  letter: string     // e.g. "J"
+  x: number         // screen position
+  y: number
+  age: number       // seconds elapsed
+  color: string     // matches key/attack type color
 }
 
 export interface GameState {
@@ -103,9 +112,25 @@ export interface GameState {
   // Consumables
   consumables: ConsumableType[]
   consumableActive: { type: ConsumableType; timer: number } | null
+  // ── Educational layer ────────────────────────────────────────────────────
+  quizEnabled: boolean         // Classroom Mode on/off — all educational features gate on this
+  selectedGrade: number
+  selectedTopicId: string      // active topic for quiz questions (e.g. 'english-vocab')
+  // Hebrew layout detection
+  hebrewLayoutActive: boolean
+  // Keyboard teaching panel
+  keyboardPanelTimer: number   // counts up during active gameplay (seconds)
+  letterFlashes: LetterFlash[]
+  // Post-wave vocabulary quiz (Grade 3+)
+  questionPhase: boolean
+  currentQuestion: Question | null
+  questionResult: 'pending' | 'correct' | 'wrong-first' | 'wrong-final'
+  questionRetryAvailable: boolean
+  questionFeedbackTimer: number  // counts DOWN in ms
+  pendingMutatorIndex: number    // which mutator was selected (0-indexed)
 }
 
-export function createGameState(isDailyChallenge = false): GameState {
+export function createGameState(isDailyChallenge = false, selectedGrade = 1, quizEnabled = false, selectedTopicId = 'english-vocab'): GameState {
   const challengeDate = new Date().toISOString().slice(0, 10)
   if (isDailyChallenge) {
     setRng(createSeededRng(getDailySeed(challengeDate)))
@@ -173,7 +198,54 @@ export function createGameState(isDailyChallenge = false): GameState {
     // Consumables
     consumables: [],
     consumableActive: null,
+    // Educational layer
+    quizEnabled,
+    selectedGrade,
+    selectedTopicId,
+    hebrewLayoutActive: false,
+    keyboardPanelTimer: 0,
+    letterFlashes: [],
+    questionPhase: false,
+    currentQuestion: null,
+    questionResult: 'pending',
+    questionRetryAvailable: true,
+    questionFeedbackTimer: 0,
+    pendingMutatorIndex: 0,
   }
+}
+
+// ── Educational helpers ───────────────────────────────────────────────────────
+
+/** Apply the chosen mutator from state.pendingMutatorIndex to state. */
+function applyPendingMutator(state: GameState): void {
+  const choiceIndex = state.pendingMutatorIndex
+  if (choiceIndex < 0 || choiceIndex >= state.mutatorChoices.length) return
+  const chosen = state.mutatorChoices[choiceIndex]
+  const priorCount = state.activeMutators.filter(m => m.id === chosen.id).length
+  let feedbackDesc = chosen.description
+  if (priorCount > 0 && chosen.stackEffects) {
+    const stackEffect = chosen.stackEffects[priorCount - 1]
+    if (stackEffect) {
+      feedbackDesc = stackEffect.description
+      const stackMutator = { ...chosen, modifiers: stackEffect.modifierDelta as MutatorModifiers }
+      state.activeMutators.push(stackMutator)
+    } else {
+      state.activeMutators.push(chosen)
+    }
+  } else {
+    state.activeMutators.push(chosen)
+  }
+  state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
+  applyMutatorStats(state.player, state.combinedModifiers)
+  const activeIdsAfter = new Set(state.activeMutators.map(m => m.id))
+  const synergyHit = (chosen.synergizes ?? []).filter(id => activeIdsAfter.has(id))
+  const synergyText = synergyHit.length > 0
+    ? ` ⚡ ${synergyHit.map(id => state.activeMutators.find(m => m.id === id)?.name ?? id).join(' + ')}`
+    : ''
+  state.mutatorFeedback = { name: chosen.name, description: feedbackDesc + synergyText, color: chosen.color, timer: 2.5 }
+  state.playerRarityGlowTimer = 2.0
+  state.playerRarityGlowColor = chosen.color
+  audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
 }
 
 // Apply mutator stat changes to player
@@ -196,6 +268,38 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     return
   }
 
+  // Hebrew layout detected — game fully paused, waiting for layout switch
+  if (state.hebrewLayoutActive) {
+    return
+  }
+
+  // Question phase — game paused while student answers vocabulary quiz
+  if (state.questionPhase) {
+    if (state.questionFeedbackTimer > 0) {
+      state.questionFeedbackTimer -= dt * 1000
+      if (state.questionFeedbackTimer <= 0) {
+        state.questionFeedbackTimer = 0
+        // Timer expired: apply mutator (correct / wrong-first retry) or skip (wrong-final)
+        if (state.questionResult === 'correct') {
+          applyPendingMutator(state)
+        } else if (state.questionResult === 'wrong-first') {
+          // Allow retry — reset to pending
+          state.questionResult = 'pending'
+        } else if (state.questionResult === 'wrong-final') {
+          // No mutator awarded
+        }
+        if (state.questionResult !== 'pending') {
+          // Close quiz
+          state.questionPhase = false
+          state.currentQuestion = null
+          state.mutatorChoices = []
+          state.mutatorSelectionInput = null
+        }
+      }
+    }
+    return // Game paused during quiz
+  }
+
   // Mutator selection pauses the game
   if (state.mutatorSelectionActive) {
     state.mutatorSelectionTimer += dt
@@ -203,41 +307,26 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     if (state.mutatorSelectionInput !== null) {
       const choiceIndex = state.mutatorSelectionInput - 1
       if (choiceIndex >= 0 && choiceIndex < state.mutatorChoices.length) {
-        const chosen = state.mutatorChoices[choiceIndex]
-        // Determine stack level (0-indexed count of prior picks of this mutator)
-        const priorCount = state.activeMutators.filter(m => m.id === chosen.id).length
-        let feedbackDesc = chosen.description
-        if (priorCount > 0 && chosen.stackEffects) {
-          // Re-pick: apply the stack effect at this level
-          const stackEffect = chosen.stackEffects[priorCount - 1]
-          if (stackEffect) {
-            feedbackDesc = stackEffect.description
-            // Create a virtual mutator with just the delta modifiers for this stack
-            const stackMutator = { ...chosen, modifiers: stackEffect.modifierDelta as MutatorModifiers }
-            state.activeMutators.push(stackMutator)
-          } else {
-            state.activeMutators.push(chosen)
-          }
+        state.pendingMutatorIndex = choiceIndex
+        state.mutatorSelectionActive = false
+        state.mutatorPeekActive = false
+
+        if (state.quizEnabled && S.QUIZ_GRADES.includes(state.selectedGrade)) {
+          // Classroom Mode ON + Grade 3+ — gate mutator behind vocabulary quiz
+          state.questionPhase = true
+          state.currentQuestion = getQuestion(state.selectedGrade, state.wave, state.selectedTopicId)
+          state.questionResult = 'pending'
+          state.questionRetryAvailable = true
+          state.questionFeedbackTimer = 0
         } else {
-          state.activeMutators.push(chosen)
+          // Grade 1–2 — apply mutator immediately, no quiz
+          applyPendingMutator(state)
+          state.mutatorChoices = []
+          state.mutatorSelectionInput = null
         }
-        state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
-        applyMutatorStats(state.player, state.combinedModifiers)
-        // Check if a synergy is now active
-        const activeIdsAfter = new Set(state.activeMutators.map(m => m.id))
-        const synergyHit = (chosen.synergizes ?? []).filter(id => activeIdsAfter.has(id))
-        const synergyText = synergyHit.length > 0
-          ? ` ⚡ ${synergyHit.map(id => state.activeMutators.find(m => m.id === id)?.name ?? id).join(' + ')}`
-          : ''
-        state.mutatorFeedback = { name: chosen.name, description: feedbackDesc + synergyText, color: chosen.color, timer: 2.5 }
-        state.playerRarityGlowTimer = 2.0
-        state.playerRarityGlowColor = chosen.color
-        audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
+      } else {
+        state.mutatorSelectionInput = null
       }
-      state.mutatorSelectionActive = false
-      state.mutatorChoices = []
-      state.mutatorSelectionInput = null
-      state.mutatorPeekActive = false
     }
     return // Game paused during selection
   }
@@ -267,6 +356,17 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   if (state.mutatorFeedback) {
     state.mutatorFeedback.timer -= dt
     if (state.mutatorFeedback.timer <= 0) state.mutatorFeedback = null
+  }
+
+  // Keyboard panel timer (counts up during active gameplay, in seconds)
+  state.keyboardPanelTimer += dt
+
+  // Age out letter flashes
+  for (let i = state.letterFlashes.length - 1; i >= 0; i--) {
+    state.letterFlashes[i].age += dt
+    if (state.letterFlashes[i].age >= S.LETTER_FLASH_LIFETIME) {
+      state.letterFlashes.splice(i, 1)
+    }
   }
 
   // Last Stand slow-mo timer
@@ -994,12 +1094,24 @@ export function renderGame(
     assets,
     // Damage numbers
     state.damageNumbers,
+    // Educational layer
+    state.quizEnabled,
+    state.selectedGrade,
+    state.hebrewLayoutActive,
+    state.keyboardPanelTimer,
+    state.letterFlashes,
+    state.questionPhase,
+    state.currentQuestion,
+    state.questionResult,
+    state.questionRetryAvailable,
+    state.questionFeedbackTimer,
+    state.pendingMutatorIndex,
   )
 }
 
 export function resetGame(state: GameState): GameState {
   const hs = state.highScore
-  const newState = createGameState(state.isDailyChallenge)
+  const newState = createGameState(state.isDailyChallenge, state.selectedGrade, state.quizEnabled, state.selectedTopicId)
   newState.highScore = hs
   return newState
 }
