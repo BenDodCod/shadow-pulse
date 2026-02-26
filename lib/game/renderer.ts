@@ -100,6 +100,9 @@ export function render(
   pendingMutatorIndex?: number,
   // Difficulty badge
   difficultyLabel?: string,
+  // Pause menu
+  paused?: boolean,
+  pauseMenuSelection?: number,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -176,6 +179,12 @@ export function render(
   // Hebrew layout guide — full-screen blocking overlay (Classroom Mode only)
   if (quizEnabled && hebrewLayoutActive) {
     drawHebrewLayoutGuide(ctx, w, h)
+    return
+  }
+
+  // Pause menu — full-screen blocking overlay
+  if (paused) {
+    drawPauseMenu(ctx, pauseMenuSelection ?? 0, score, w, h)
     return
   }
 
@@ -3217,21 +3226,29 @@ function drawQuestionChallenge(
   }
 
   // ── English word + emoji ──────────────────────────────────────────────────
-  // Draw emoji + word side-by-side, both at the same baseline
+  // Measure combined width so the emoji+word group is centered as a unit
   ctx.textBaseline = 'middle'
   const wordY = y + 28
+  const wordText = `"${question.englishWord}"`
+  const emojiGap = 10
 
+  ctx.font = 'bold 36px monospace'
+  const wordW = ctx.measureText(wordText).width
   ctx.font = 'bold 32px serif'
+  const emojiW = ctx.measureText(question.emoji).width
+  const groupW = emojiW + emojiGap + wordW
+  const groupX = cx - groupW / 2
+
   ctx.fillStyle = '#ffffff'
-  ctx.textAlign = 'right'
-  ctx.fillText(question.emoji, cx - 6, wordY)
+  ctx.textAlign = 'left'
+  ctx.fillText(question.emoji, groupX, wordY)
 
   ctx.font = 'bold 36px monospace'
   ctx.fillStyle = '#ffffff'
   ctx.shadowColor = '#7b2fff'
   ctx.shadowBlur = 16
   ctx.textAlign = 'left'
-  ctx.fillText(`"${question.englishWord}"`, cx + 6, wordY)
+  ctx.fillText(wordText, groupX + emojiW + emojiGap, wordY)
   ctx.shadowBlur = 0
   y += 70
 
@@ -3332,4 +3349,92 @@ function drawQuestionChallenge(
     ctx.textAlign = 'center'
     ctx.fillText('טעות — אין כוח הפעם, לגל הבא!', cx, y)
   }
+}
+
+/**
+ * Full-screen pause overlay — dark backdrop + 3-option menu (Resume / Restart / Return to Title).
+ * Navigated with W/S or ↑↓; confirmed with Enter or number keys 1/2/3.
+ */
+function drawPauseMenu(
+  ctx: CanvasRenderingContext2D,
+  selection: number,
+  score: number,
+  w: number,
+  h: number,
+): void {
+  const cx = w / 2
+  const cy = h / 2
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.80)'
+  ctx.fillRect(0, 0, w, h)
+
+  // Title
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = 'bold 48px monospace'
+  ctx.fillStyle = '#c084fc'
+  ctx.shadowColor = '#7b2fff'
+  ctx.shadowBlur = 24
+  ctx.fillText('⏸ PAUSED', cx, cy - 110)
+  ctx.shadowBlur = 0
+
+  // Score
+  ctx.font = '16px monospace'
+  ctx.fillStyle = '#ffffff88'
+  ctx.fillText(`Score: ${score.toLocaleString()}`, cx, cy - 66)
+
+  // Menu items
+  const items = [
+    { key: '1', label: 'RESUME', hint: 'ESC' },
+    { key: '2', label: 'RESTART', hint: '' },
+    { key: '3', label: 'RETURN TO TITLE', hint: '' },
+  ]
+  const itemH = 52
+  const startY = cy - 18
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const iy = startY + i * itemH
+    const isSelected = i === selection
+
+    if (isSelected) {
+      ctx.fillStyle = 'rgba(123, 47, 255, 0.30)'
+      ctx.beginPath()
+      ctx.roundRect(cx - 140, iy - 18, 280, 36, 8)
+      ctx.fill()
+
+      // Left accent bar
+      ctx.fillStyle = '#c084fc'
+      ctx.fillRect(cx - 140, iy - 18, 4, 36)
+    }
+
+    // Number key hint
+    ctx.font = '13px monospace'
+    ctx.textAlign = 'left'
+    ctx.fillStyle = isSelected ? '#fbbf24' : '#664400'
+    ctx.fillText(`[${item.key}]`, cx - 132, iy)
+
+    // Label
+    ctx.font = 'bold 20px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillStyle = isSelected ? '#ffffff' : '#666666'
+    if (isSelected) { ctx.shadowColor = '#c084fc'; ctx.shadowBlur = 8 }
+    ctx.fillText(item.label, cx + 10, iy)
+    ctx.shadowBlur = 0
+
+    // Hint text (e.g. "or ESC" beside Resume)
+    if (item.hint) {
+      ctx.font = '12px monospace'
+      ctx.textAlign = 'right'
+      ctx.fillStyle = '#555555'
+      ctx.fillText(`or ${item.hint}`, cx + 140, iy)
+    }
+  }
+
+  // Bottom hint
+  ctx.font = '12px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#444444'
+  ctx.fillText('W / S  or  ↑↓  navigate   •   ENTER confirm', cx, cy + 140)
 }

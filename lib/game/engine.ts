@@ -131,6 +131,9 @@ export interface GameState {
   questionRetryAvailable: boolean
   questionFeedbackTimer: number  // counts DOWN in ms
   pendingMutatorIndex: number    // which mutator was selected (0-indexed)
+  // ── Pause menu ───────────────────────────────────────────────────────────────
+  paused: boolean
+  pauseMenuSelection: number     // 0=Resume, 1=Restart, 2=Return to Title
 }
 
 /** Returns the active DifficultyPreset, respecting Classroom (grade-split) and Daily overrides. */
@@ -239,6 +242,8 @@ export function createGameState(isDailyChallenge = false, selectedGrade = 1, qui
     questionRetryAvailable: true,
     questionFeedbackTimer: 0,
     pendingMutatorIndex: 0,
+    paused: false,
+    pauseMenuSelection: 0,
   }
 }
 
@@ -293,6 +298,11 @@ function applyMutatorStats(player: Player, mods: MutatorModifiers, difficultyHpB
 
 export function updateGame(state: GameState, input: InputState, dt: number): void {
   if (state.gameOver) {
+    return
+  }
+
+  // ESC pause — game fully frozen, menu handled by component key handler
+  if (state.paused) {
     return
   }
 
@@ -1144,6 +1154,9 @@ export function renderGame(
       : state.difficulty === 'easy' ? 'EASY'
       : state.difficulty === 'arcade' ? 'ARCADE'
       : '',
+    // Pause menu
+    state.paused,
+    state.pauseMenuSelection,
   )
 }
 

@@ -131,6 +131,35 @@ export default function ShadowPulseGame() {
         }
       }
 
+      // ESC — toggle pause (blocked during gameOver, mutator selection, quiz, wave events)
+      if (key === 'escape' && !wasPressed) {
+        const s = gameStateRef.current
+        if (s && !s.gameOver && !s.mutatorSelectionActive && !s.questionPhase && !s.pendingWaveEvent) {
+          s.paused = !s.paused
+          if (!s.paused) s.pauseMenuSelection = 0
+        }
+      }
+
+      // Pause menu navigation — block all other input while paused
+      if (gameStateRef.current?.paused) {
+        const s = gameStateRef.current
+        if ((key === 'arrowup' || key === 'w') && !wasPressed)
+          s.pauseMenuSelection = Math.max(0, s.pauseMenuSelection - 1)
+        if ((key === 'arrowdown' || key === 's') && !wasPressed)
+          s.pauseMenuSelection = Math.min(2, s.pauseMenuSelection + 1)
+
+        const confirmSel = (sel: number) => {
+          if (sel === 0) { s.paused = false; s.pauseMenuSelection = 0 }
+          else if (sel === 1) { gameStateRef.current = resetGame(s) }
+          else if (sel === 2) { setStarted(false) }
+        }
+        if (key === 'enter' && !wasPressed) confirmSel(s.pauseMenuSelection)
+        if (key === '1' && !wasPressed) confirmSel(0)
+        if (key === '2' && !wasPressed) confirmSel(1)
+        if (key === '3' && !wasPressed) confirmSel(2)
+        return
+      }
+
       // Movement
       input.up = keysRef.current.has('w') || keysRef.current.has('arrowup')
       input.down = keysRef.current.has('s') || keysRef.current.has('arrowdown')
@@ -365,6 +394,44 @@ export default function ShadowPulseGame() {
           border: '1px solid #1a1a2e',
         }}
         tabIndex={0}
+        onClick={(e) => {
+          const s = gameStateRef.current
+          if (!s?.paused) return
+          const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
+          const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+          const x = (e.clientX - rect.left) * (GAME_WIDTH / rect.width)
+          const y = (e.clientY - rect.top) * (GAME_HEIGHT / rect.height)
+          const startY = cy - 18
+          for (let i = 0; i < 3; i++) {
+            const iy = startY + i * 52
+            if (x >= cx - 140 && x <= cx + 140 && y >= iy - 18 && y <= iy + 18) {
+              if (i === 0) { s.paused = false; s.pauseMenuSelection = 0 }
+              else if (i === 1) { gameStateRef.current = resetGame(s) }
+              else if (i === 2) { setStarted(false) }
+              break
+            }
+          }
+        }}
+        onMouseMove={(e) => {
+          const s = gameStateRef.current
+          const canvas = e.target as HTMLCanvasElement
+          if (!s?.paused) { canvas.style.cursor = 'default'; return }
+          const rect = canvas.getBoundingClientRect()
+          const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+          const x = (e.clientX - rect.left) * (GAME_WIDTH / rect.width)
+          const y = (e.clientY - rect.top) * (GAME_HEIGHT / rect.height)
+          const startY = cy - 18
+          let hit = false
+          for (let i = 0; i < 3; i++) {
+            const iy = startY + i * 52
+            if (x >= cx - 140 && x <= cx + 140 && y >= iy - 18 && y <= iy + 18) {
+              s.pauseMenuSelection = i
+              hit = true
+              break
+            }
+          }
+          canvas.style.cursor = hit ? 'pointer' : 'default'
+        }}
       />
     </div>
   )
