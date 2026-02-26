@@ -178,3 +178,13 @@ export function setArenaRadius(r: number): void {
 
 // Sprites
 export const SPRITE_SIZE = 64 // px per frame in sprite sheet
+
+// Visual Clarity Polish
+export const DAMAGE_NUMBER_LIFETIME = 0.8       // seconds floating numbers are visible
+export const AIM_ARC_ALPHA = 0.07               // opacity of the passive aim direction preview
+export const TELEGRAPH_THRESHOLD = 0.4          // seconds before attack to show enemy warning ring
+export const DAMAGE_NUMBER_COLORS: Record<string, string> = {
+  light: '#cc99ff',
+  heavy: '#ffaa22',
+  pulse: '#44ccff',
+}

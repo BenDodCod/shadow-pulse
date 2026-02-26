@@ -5,7 +5,7 @@ import { ParticleSystem, drawParticles } from './particles'
 import { LevelTheme, Obstacle, Hazard } from './levels'
 import { fromAngle } from './vec2'
 import * as S from './settings'
-import { Mutator } from './mutators'
+import { Mutator, computeCombinedModifiers } from './mutators'
 import { ContractState, ConsumableType, getContractProgressText, getDifficultyColor } from './contracts'
 import { WaveAffix } from './affixes'
 import { WaveEvent } from './waves'
@@ -75,6 +75,7 @@ export function render(
   activeWaveEvent?: WaveEvent | null,
   surgeZone?: { x: number; y: number; radius: number } | null,
   assets?: AssetCache | null,
+  damageNumbers?: Array<{ value: number; pos: { x: number; y: number }; vel: { x: number; y: number }; age: number; lifetime: number; color: string }>,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -118,6 +119,11 @@ export function render(
   // Blackout event: near-black overlay with radial vision cutouts
   if (activeWaveEvent?.effectType === 'blackout') {
     drawBlackout(ctx, player, enemies, w, h)
+  }
+
+  // Floating damage numbers (world space, inside camera transform)
+  if (damageNumbers && damageNumbers.length > 0) {
+    drawDamageNumbers(ctx, damageNumbers)
   }
 
   // Restore camera transform for HUD
@@ -916,6 +922,19 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, rarityGlowTim
   }
   ctx.globalAlpha = 1
 
+  // Passive aim direction arc (always visible when not attacking — shows where the next hit will land)
+  if (player.attacking === 'none' && !player.isDashing) {
+    ctx.globalAlpha = S.AIM_ARC_ALPHA
+    ctx.fillStyle = S.NEON_GLOW
+    ctx.shadowBlur = 0
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.arc(0, 0, S.LIGHT_RANGE * 0.9, player.facing - S.LIGHT_ARC / 2, player.facing + S.LIGHT_ARC / 2)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
+
   // Attack arc visualization
   if (player.attacking !== 'none') {
     drawAttackArc(ctx, player)
@@ -1096,6 +1115,31 @@ function drawAttackArc(ctx: CanvasRenderingContext2D, player: Player): void {
   ctx.globalAlpha = 1
 }
 
+function drawDamageNumbers(
+  ctx: CanvasRenderingContext2D,
+  numbers: Array<{ value: number; pos: { x: number; y: number }; vel: { x: number; y: number }; age: number; lifetime: number; color: string }>,
+): void {
+  ctx.textAlign = 'center'
+  for (const dn of numbers) {
+    const t = dn.age / dn.lifetime
+    const alpha = 1 - Math.pow(t, 1.5)
+    const popScale = t < 0.12 ? 1.3 - t * 2.5 : 1.0
+    const x = dn.pos.x + dn.vel.x * dn.age
+    const y = dn.pos.y + dn.vel.y * dn.age
+
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.scale(popScale, popScale)
+    ctx.globalAlpha = alpha
+    ctx.font = 'bold 14px monospace'
+    ctx.fillStyle = dn.color
+    ctx.fillText(String(dn.value), 0, 0)
+    ctx.restore()
+  }
+  ctx.globalAlpha = 1
+  ctx.textAlign = 'left'
+}
+
 // ─── Enemy ───────────────────────────────────────────────────────────────────
 
 function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
@@ -1145,6 +1189,20 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
       ctx.lineWidth = 3 - ring
       ctx.beginPath()
       ctx.arc(0, 0, enemy.shockwaveRange * rp, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+  }
+
+  // Attack telegraph — pulsing ring warns player when enemy is about to strike
+  if ((enemy.type === 'normal' || enemy.type === 'fast') && !enemy.isAttacking) {
+    const thresh = S.TELEGRAPH_THRESHOLD
+    if (enemy.attackTimer > 0 && enemy.attackTimer < thresh) {
+      const urgency = 1 - enemy.attackTimer / thresh
+      const pulseRadius = enemy.size + 3 + urgency * enemy.size * 0.8
+      ctx.strokeStyle = `rgba(255, 50, 50, ${urgency * 0.65})`
+      ctx.lineWidth = 1.5 + urgency
+      ctx.beginPath()
+      ctx.arc(0, 0, pulseRadius, 0, Math.PI * 2)
       ctx.stroke()
     }
   }
@@ -2099,7 +2157,7 @@ function drawMutatorSelection(
 
   // Card dimensions
   const cardWidth = 300
-  const cardHeight = 280
+  const cardHeight = 320
   const cardSpacing = 40
   const totalWidth = choices.length * cardWidth + (choices.length - 1) * cardSpacing
   const startX = (w - totalWidth) / 2
@@ -2115,6 +2173,21 @@ function drawMutatorSelection(
     common: '#445566',
     rare: '#4488aa',
     epic: '#8844cc',
+  }
+
+  // Epic choice announcement banner
+  const hasEpic = choices.some(c => c.rarity === 'epic')
+  if (hasEpic) {
+    const epicFlash = Math.sin(now * 0.005) * 0.35 + 0.65
+    ctx.globalAlpha = titleAlpha * epicFlash
+    ctx.fillStyle = '#cc66ff'
+    ctx.shadowColor = '#aa44ee'
+    ctx.shadowBlur = 20
+    ctx.font = 'bold 13px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('✦ EPIC CHOICE AVAILABLE ✦', w / 2, 148)
+    ctx.shadowBlur = 0
+    ctx.globalAlpha = 1
   }
 
   for (let i = 0; i < choices.length; i++) {
@@ -2143,10 +2216,39 @@ function drawMutatorSelection(
     // Card background
     ctx.fillStyle = rarityBgColors[mutator.rarity]
     ctx.strokeStyle = rarityBorderColors[mutator.rarity]
-    ctx.lineWidth = 2
+    ctx.lineWidth = mutator.rarity === 'epic' ? 2.5 : 2
     roundRect(ctx, cardX, cardY, cardWidth, cardHeight, 12)
     ctx.fill()
     ctx.stroke()
+
+    // Epic rarity fanfare: animated shimmer sweep + extra pulsing border glow
+    if (mutator.rarity === 'epic') {
+      const epicPulse = Math.sin(now * 0.003) * 0.5 + 0.5
+      ctx.shadowColor = mutator.color
+      ctx.shadowBlur = 18 + epicPulse * 14
+      ctx.strokeStyle = mutator.color + Math.round((0.4 + epicPulse * 0.4) * 255).toString(16).padStart(2, '0')
+      ctx.lineWidth = 2.5
+      roundRect(ctx, cardX, cardY, cardWidth, cardHeight, 12)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+
+      // Shimmer sweep line (top → bottom over 1.5s cycle)
+      const shimmerT = ((now * 0.0007) % 1)
+      const shimmerY = cardY + shimmerT * (cardHeight + 20) - 10
+      if (shimmerY > cardY && shimmerY < cardY + cardHeight) {
+        const shimGrad = ctx.createLinearGradient(cardX, shimmerY - 8, cardX, shimmerY + 8)
+        shimGrad.addColorStop(0, 'transparent')
+        shimGrad.addColorStop(0.5, 'rgba(255,255,255,0.12)')
+        shimGrad.addColorStop(1, 'transparent')
+        ctx.save()
+        ctx.beginPath()
+        roundRect(ctx, cardX, cardY, cardWidth, cardHeight, 12)
+        ctx.clip()
+        ctx.fillStyle = shimGrad
+        ctx.fillRect(cardX, shimmerY - 8, cardWidth, 16)
+        ctx.restore()
+      }
+    }
 
     // Rarity badge
     ctx.fillStyle = mutator.color + '66'
@@ -2192,12 +2294,64 @@ function drawMutatorSelection(
       ctx.shadowBlur = 0
     }
 
+    // Stat delta preview — show what changes when picking this mutator
+    const beforeMods = computeCombinedModifiers(activeMutators)
+    const afterMods = computeCombinedModifiers([...activeMutators, mutator])
+    const statDeltas: Array<{ label: string; value: string; positive: boolean }> = []
+
+    const checkMult = (field: keyof typeof beforeMods, label: string) => {
+      const b = (beforeMods[field] as number | undefined) ?? 1
+      const a = (afterMods[field] as number | undefined) ?? 1
+      const delta = Math.round((a - b) * 100)
+      if (delta !== 0) statDeltas.push({ label, value: `${delta > 0 ? '+' : ''}${delta}%`, positive: delta > 0 })
+    }
+    const checkBonus = (field: keyof typeof beforeMods, label: string, unit = '') => {
+      const b = (beforeMods[field] as number | undefined) ?? 0
+      const a = (afterMods[field] as number | undefined) ?? 0
+      const delta = Math.round((a - b) * 10) / 10
+      if (delta !== 0) statDeltas.push({ label, value: `${delta > 0 ? '+' : ''}${delta}${unit}`, positive: delta > 0 })
+    }
+
+    checkMult('lightDamageMultiplier', 'Light DMG')
+    checkMult('heavyDamageMultiplier', 'Heavy DMG')
+    checkMult('pulseWaveDamageMultiplier', 'Pulse DMG')
+    checkMult('speedMultiplier', 'Speed')
+    checkBonus('maxHpBonus', 'Max HP')
+    checkBonus('maxEnergyBonus', 'Max Energy')
+    if (mutator.modifiers.autoLightAttack && !beforeMods.autoLightAttack) statDeltas.push({ label: 'AUTO LIGHT', value: 'ON', positive: true })
+    if (mutator.modifiers.autoPulseWave && !beforeMods.autoPulseWave) statDeltas.push({ label: 'AUTO PULSE', value: 'ON', positive: true })
+    if (mutator.modifiers.dashDamagesEnemies && !beforeMods.dashDamagesEnemies) statDeltas.push({ label: 'DASH DAMAGE', value: 'ON', positive: true })
+
+    const displayDeltas = statDeltas.slice(0, 3)
+    if (displayDeltas.length > 0) {
+      const deltaStartY = cardY + cardHeight - 90
+      ctx.font = '10px monospace'
+      ctx.textAlign = 'left'
+      for (let d = 0; d < displayDeltas.length; d++) {
+        const delta = displayDeltas[d]
+        const dy = deltaStartY + d * 15
+        ctx.fillStyle = delta.positive ? '#66ffaa' : '#ff6644'
+        ctx.fillText(`${delta.positive ? '↑' : '↓'} ${delta.label}`, cardX + 16, dy)
+        ctx.textAlign = 'right'
+        ctx.fillText(delta.value, cardX + cardWidth - 16, dy)
+        ctx.textAlign = 'left'
+      }
+      // Separator line above deltas
+      ctx.strokeStyle = '#ffffff18'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(cardX + 12, deltaStartY - 8)
+      ctx.lineTo(cardX + cardWidth - 12, deltaStartY - 8)
+      ctx.stroke()
+    }
+
     // Key prompt
     ctx.font = 'bold 28px monospace'
     ctx.fillStyle = mutator.color
     ctx.shadowColor = mutator.color
     ctx.shadowBlur = 12
-    ctx.fillText(`[${i + 1}]`, cardX + cardWidth / 2, cardY + cardHeight - 30)
+    ctx.textAlign = 'center'
+    ctx.fillText(`[${i + 1}]`, cardX + cardWidth / 2, cardY + cardHeight - 18)
     ctx.shadowBlur = 0
 
     ctx.globalAlpha = 1
@@ -2629,33 +2783,41 @@ function drawCurrentAffix(ctx: CanvasRenderingContext2D, affix: WaveAffix, mutat
   const yOffset = padding + (mutatorCount > 0 ? 54 : 10)
 
   // Label
-  ctx.fillStyle = '#ffffff44'
+  ctx.fillStyle = '#ffffff55'
   ctx.font = '10px monospace'
   ctx.textAlign = 'left'
-  ctx.fillText('AFFIX', padding, yOffset + 10)
+  ctx.fillText('WAVE AFFIX', padding, yOffset + 10)
 
-  // Affix card
+  // Affix card — more visible with glow
   const cardX = padding
-  const cardY = yOffset + 16
-  const cardW = 90
-  const cardH = 26
+  const cardY = yOffset + 14
+  const cardW = 120
+  const cardH = 28
 
-  ctx.fillStyle = affix.color + '22'
-  ctx.strokeStyle = affix.color + '66'
-  ctx.lineWidth = 1
-  roundRect(ctx, cardX, cardY, cardW, cardH, 4)
+  ctx.shadowColor = affix.color
+  ctx.shadowBlur = 8
+  ctx.fillStyle = affix.color + '30'
+  ctx.strokeStyle = affix.color + '99'
+  ctx.lineWidth = 1.5
+  roundRect(ctx, cardX, cardY, cardW, cardH, 5)
   ctx.fill()
   ctx.stroke()
+  ctx.shadowBlur = 0
 
   // Icon
-  ctx.font = 'bold 10px monospace'
+  ctx.font = 'bold 11px monospace'
   ctx.fillStyle = affix.color
-  ctx.fillText(affix.icon, cardX + 8, cardY + 17)
+  ctx.fillText(affix.icon, cardX + 8, cardY + 18)
 
   // Name
-  ctx.font = '11px monospace'
-  ctx.fillStyle = '#ffffffcc'
-  ctx.fillText(affix.name, cardX + 28, cardY + 17)
+  ctx.font = 'bold 11px monospace'
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(affix.name, cardX + 28, cardY + 12)
+
+  // Tier
+  ctx.font = '9px monospace'
+  ctx.fillStyle = affix.color + 'cc'
+  ctx.fillText(affix.tier.toUpperCase(), cardX + 28, cardY + 23)
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
