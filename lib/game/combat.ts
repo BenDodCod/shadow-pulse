@@ -24,6 +24,8 @@ export interface CombatResult {
   damageSourceType: EnemyType | null  // Which enemy type dealt the damage
   // Damage feedback
   damageDir: Vec2   // normalized direction from attacker to player
+  // Floating damage numbers
+  damageHits: Array<{ damage: number; pos: { x: number; y: number }; hitType: 'light' | 'heavy' | 'pulse' }>
 }
 
 function angleDiff(a: number, b: number): number {
@@ -46,6 +48,7 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
     damageDealt: 0,
     damageSourceType: null,
     damageDir: vec2(0, 0),
+    damageHits: [],
   }
 
   if (player.attacking === 'none' || player.attackTime < 0.01) return result
@@ -144,6 +147,13 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
       },
       type: hitType,
       time: 0.3,
+    })
+
+    // Floating damage number
+    result.damageHits.push({
+      damage: attackDamage,
+      pos: { x: enemy.pos.x, y: enemy.pos.y - enemy.size },
+      hitType: hitType === 'pulse' ? 'pulse' : hitType,
     })
   }
 
@@ -251,6 +261,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
     damageDealt: 0,
     damageSourceType: null,
     damageDir: vec2(0, 0),
+    damageHits: [],
   }
 
   if (!player.isAlive) return result

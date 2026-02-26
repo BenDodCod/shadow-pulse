@@ -32,6 +32,15 @@ export interface SlashTrail {
   maxAge: number
 }
 
+export interface DamageNumber {
+  value: number
+  pos: { x: number; y: number }
+  vel: { x: number; y: number }
+  age: number
+  lifetime: number
+  color: string
+}
+
 export interface GameState {
   player: Player
   enemies: Enemy[]
@@ -79,6 +88,8 @@ export interface GameState {
   damageDir: { x: number; y: number }
   // Slash trails
   slashTrails: SlashTrail[]
+  // Floating damage numbers
+  damageNumbers: DamageNumber[]
   // Daily Challenge
   isDailyChallenge: boolean
   challengeDate: string
@@ -148,6 +159,8 @@ export function createGameState(isDailyChallenge = false): GameState {
     damageDir: { x: 0, y: 0 },
     // Slash trails
     slashTrails: [],
+    // Floating damage numbers
+    damageNumbers: [],
     // Daily Challenge
     isDailyChallenge,
     challengeDate,
@@ -431,6 +444,18 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     emitHitSparks(state.particles, effect.pos, effect.type === 'pulse' ? '#7b2fff' : '#ffffff', effect.type === 'heavy' ? 15 : 8)
   }
   state.score += playerCombat.enemiesKilled * 50
+
+  // Spawn floating damage numbers
+  for (const hit of playerCombat.damageHits) {
+    state.damageNumbers.push({
+      value: hit.damage,
+      pos: { x: hit.pos.x, y: hit.pos.y },
+      vel: { x: (Math.random() - 0.5) * 30, y: -55 },
+      age: 0,
+      lifetime: S.DAMAGE_NUMBER_LIFETIME,
+      color: S.DAMAGE_NUMBER_COLORS[hit.hitType] ?? '#ffffff',
+    })
+  }
 
   // Audio: attack sounds (on new attack start)
   if (state.player.attacking !== 'none' && prevAttacking === 'none') {
@@ -873,6 +898,14 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     }
   }
 
+  // Damage numbers — age and cull
+  for (let i = state.damageNumbers.length - 1; i >= 0; i--) {
+    state.damageNumbers[i].age += dt
+    if (state.damageNumbers[i].age >= state.damageNumbers[i].lifetime) {
+      state.damageNumbers.splice(i, 1)
+    }
+  }
+
   // Particles
   updateParticles(state.particles, dt)
   const r = state.levelTheme.arenaRadius
@@ -959,6 +992,8 @@ export function renderGame(
     state.surgeZone,
     // Sprite assets
     assets,
+    // Damage numbers
+    state.damageNumbers,
   )
 }
 
