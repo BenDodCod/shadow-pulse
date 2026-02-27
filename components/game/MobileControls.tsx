@@ -197,10 +197,14 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRe
     if (thumbRef.current) {
       thumbRef.current.style.transform = `translate(${cx * 0.54}px,${cy * 0.54}px)`
     }
-    const thr = 10
+    // Hysteresis: activate at 18px, release only when below 7px — prevents direction flickering
+    const THR = 18
+    const REL = 7
     const input = inputRef.current
-    input.right = dx > thr;  input.left = dx < -thr
-    input.down  = dy > thr;  input.up   = dy < -thr
+    input.right = dx >  THR || (input.right && dx >  REL)
+    input.left  = dx < -THR || (input.left  && dx < -REL)
+    input.down  = dy >  THR || (input.down  && dy >  REL)
+    input.up    = dy < -THR || (input.up    && dy < -REL)
   }, [inputRef])
 
   const handleJoystickEnd = useCallback((e: React.TouchEvent) => {
@@ -274,7 +278,7 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRe
     : { position: 'fixed', left: 0, top: 0, width: '45vw', height: '100dvh', zIndex: 20, touchAction: 'none' }
 
   const buttonPadStyle: React.CSSProperties = isPortrait
-    ? { position: 'fixed', right: 12, bottom: 12, top: PORTRAIT_TOP, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-end', gap: 10, zIndex: 20, touchAction: 'none' }
+    ? { position: 'fixed', right: 12, bottom: 0, top: PORTRAIT_TOP, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', gap: 12, zIndex: 20, touchAction: 'none', paddingBottom: 16 }
     : { position: 'fixed', right: 16, bottom: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 20, touchAction: 'none' }
 
   const helpBtnStyle: React.CSSProperties = isPortrait
@@ -290,7 +294,7 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRe
     : { position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 16, zIndex: 30 }
 
   const restartBtnStyle: React.CSSProperties = isPortrait
-    ? { position: 'fixed', bottom: '30%', left: '25vw', transform: 'translateX(-50%)', width: 200, height: 56, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 17, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 35, boxShadow: '0 0 20px rgba(255,80,80,0.4)', cursor: 'pointer', touchAction: 'none' }
+    ? { position: 'fixed', bottom: '35%', left: 12, width: 'calc(50vw - 24px)', height: 52, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 16, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 35, boxShadow: '0 0 20px rgba(255,80,80,0.4)', cursor: 'pointer', touchAction: 'none' }
     : { position: 'fixed', bottom: '16vh', left: '50%', transform: 'translateX(-50%)', width: 220, height: 60, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 18, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 35, boxShadow: '0 0 24px rgba(255,80,80,0.45)', cursor: 'pointer', touchAction: 'none' }
 
   return (
@@ -342,7 +346,7 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRe
         {!joystickVisible && (
           <div style={{
             position: 'absolute',
-            bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
             color: 'rgba(255,255,255,0.1)', ...mono, fontSize: 11,
             pointerEvents: 'none', textAlign: 'center',
           }}>
