@@ -61,20 +61,34 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRe
   const [heavyCharging, setHeavyCharging] = useState(false)
   const prevGameOverRef = useRef(false)
 
-  // Fullscreen
+  // Fullscreen (with webkit prefix for Safari/Android Chrome)
   const [isFullscreen, setIsFullscreen] = useState(false)
   useEffect(() => {
-    const onFSChange = () => setIsFullscreen(!!document.fullscreenElement)
+    const onFSChange = () =>
+      setIsFullscreen(!!(document.fullscreenElement || (document as unknown as Record<string,unknown>).webkitFullscreenElement))
     document.addEventListener('fullscreenchange', onFSChange)
-    return () => document.removeEventListener('fullscreenchange', onFSChange)
+    document.addEventListener('webkitfullscreenchange', onFSChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFSChange)
+      document.removeEventListener('webkitfullscreenchange', onFSChange)
+    }
   }, [])
   const toggleFullscreen = useCallback((e: React.TouchEvent) => {
     e.preventDefault()
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {})
-    }
+    try {
+      const doc = document as unknown as Record<string, unknown>
+      const el = document.documentElement as unknown as Record<string, unknown>
+      if (document.fullscreenElement || doc.webkitFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen()
+        else if (typeof doc.webkitExitFullscreen === 'function') (doc.webkitExitFullscreen as () => void)()
+      } else {
+        if (typeof el.requestFullscreen === 'function') {
+          (el.requestFullscreen as () => Promise<void>)().catch(() => {})
+        } else if (typeof el.webkitRequestFullscreen === 'function') {
+          (el.webkitRequestFullscreen as () => void)()
+        }
+      }
+    } catch { /* unsupported browser */ }
   }, [])
 
   // Poll game state at ~60fps for conditional UI
