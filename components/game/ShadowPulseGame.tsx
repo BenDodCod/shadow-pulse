@@ -7,6 +7,7 @@ import { audio } from '@/lib/game/audio'
 import { GAME_WIDTH, GAME_HEIGHT } from '@/lib/game/settings'
 import { DailyEntry } from '@/lib/game/renderer'
 import { AssetCache, loadAssets } from '@/lib/game/assetLoader'
+import MobileControls from './MobileControls'
 import {
   submitDailyChallengeScore,
   getDailyLeaderboard,
@@ -19,7 +20,10 @@ export default function ShadowPulseGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameStateRef = useRef<GameState | null>(null)
   const assetsRef = useRef<AssetCache | null>(null)
+  const restartRef = useRef(false)
   const [scale, setScale] = useState(1)
+  const [isTouch, setIsTouch] = useState(false)
+  const [isLandscape, setIsLandscape] = useState(true)
 
   useEffect(() => {
     const update = () =>
@@ -27,6 +31,16 @@ export default function ShadowPulseGame() {
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
+  }, [])
+
+  // Detect touch device and orientation
+  useEffect(() => {
+    setIsTouch(window.matchMedia('(pointer: coarse)').matches)
+    const orientMedia = window.matchMedia('(orientation: landscape)')
+    setIsLandscape(orientMedia.matches)
+    const onOrient = (e: MediaQueryListEvent) => setIsLandscape(e.matches)
+    orientMedia.addEventListener('change', onOrient)
+    return () => orientMedia.removeEventListener('change', onOrient)
   }, [])
 
   // Preload sprite assets on mount (non-blocking — game renders with fallback until ready)
@@ -200,6 +214,17 @@ export default function ShadowPulseGame() {
       // Clamp dt
       dt = Math.min(dt, 1 / 30)
 
+      // Handle mobile restart signal
+      if (restartRef.current) {
+        restartRef.current = false
+        const wasDaily = state.isDailyChallenge
+        gameStateRef.current = resetGame(state)
+        scoreSubmittedRef.current = false
+        if (wasDaily) setDailyLeaderboard([])
+        animFrameRef.current = requestAnimationFrame(gameLoop)
+        return
+      }
+
       // Process input
       const input = { ...inputRef.current }
 
@@ -246,6 +271,11 @@ export default function ShadowPulseGame() {
     }
   }, [started, dailyLeaderboard])
 
+  // Portrait overlay for touch devices
+  if (isTouch && !isLandscape) {
+    return <PortraitOverlay />
+  }
+
   if (!started) {
     return (
       <TitleScreen
@@ -257,7 +287,7 @@ export default function ShadowPulseGame() {
   }
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#0a0a12', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#0a0a12', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', touchAction: 'none', userSelect: 'none', WebkitUserSelect: 'none' }}>
       <canvas
         ref={canvasRef}
         width={GAME_WIDTH}
@@ -270,6 +300,28 @@ export default function ShadowPulseGame() {
         }}
         tabIndex={0}
       />
+      {isTouch && (
+        <MobileControls
+          inputRef={inputRef}
+          gameStateRef={gameStateRef}
+          canvasRef={canvasRef}
+          restartRef={restartRef}
+        />
+      )}
+    </div>
+  )
+}
+
+function PortraitOverlay() {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: '#0a0a12', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
+      <div style={{ fontSize: 48, userSelect: 'none' }}>📱</div>
+      <p style={{ fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)', fontSize: 16, letterSpacing: '0.15em', textAlign: 'center', margin: 0 }}>
+        Rotate your device<br />to play
+      </p>
+      <p style={{ fontFamily: 'monospace', color: 'rgba(123,47,255,0.6)', fontSize: 11, letterSpacing: '0.1em', margin: 0 }}>
+        LANDSCAPE MODE REQUIRED
+      </p>
     </div>
   )
 }
