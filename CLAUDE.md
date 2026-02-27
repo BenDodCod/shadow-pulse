@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Allwayes use "AskUserQuestion" tool when in plan mode.
+ALWAYS use "AskUserQuestion" tool when in plan mode TO ASK QUESTIONS !!!!!!!!!!!
 
 ## Build Commands
 
