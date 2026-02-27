@@ -103,6 +103,11 @@ export function render(
   // Pause menu
   paused?: boolean,
   pauseMenuSelection?: number,
+  // Run stats (shown on game over screen)
+  totalKills?: number,
+  totalDamageDealt?: number,
+  contractsCompleted?: number,
+  mutatorsCount?: number,
 ): void {
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -160,6 +165,14 @@ export function render(
 
   // Restore camera transform for HUD
   ctx.restore()
+
+  // Off-screen enemy indicators (screen-space, before HUD)
+  if (enemies.length > 0) {
+    drawOffScreenIndicators(ctx, enemies, camera, w, h)
+  }
+
+  // Boss health bar (screen-space, top-center)
+  drawBossHealthBar(ctx, enemies, w, h)
 
   // Damage feedback (red vignette + directional blur)
   if (damageFlashTimer && damageFlashTimer > 0) {
@@ -254,7 +267,7 @@ export function render(
 
   // Game Over
   if (gameOver) {
-    drawGameOver(ctx, score, highScore, level, damageByEnemyType, w, h, isDailyChallenge, dailyLeaderboard)
+    drawGameOver(ctx, score, highScore, level, damageByEnemyType, w, h, isDailyChallenge, dailyLeaderboard, totalKills ?? 0, totalDamageDealt ?? 0, contractsCompleted ?? 0, mutatorsCount ?? 0)
   }
 }
 
@@ -1250,6 +1263,38 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
     }
   }
 
+  // Boss shockwave ring (ring pulse attack) — boss timer starts at 0.5s
+  if (enemy.type === 'boss' && enemy.shockwaveActive) {
+    const shockProgress = 1 - (enemy.shockwaveTimer / 0.5)
+    for (let ring = 0; ring < 4; ring++) {
+      const rp = Math.max(0, Math.min(1, shockProgress + ring * 0.06))
+      if (rp <= 0) continue
+      const alpha = Math.max(0, (1 - shockProgress) * (1 - ring * 0.2))
+      ctx.strokeStyle = `rgba(204, 0, 255, ${alpha})`
+      ctx.lineWidth = 4 - ring
+      ctx.shadowColor = '#cc00ff'
+      ctx.shadowBlur = 12
+      ctx.beginPath()
+      ctx.arc(0, 0, enemy.shockwaveRange * rp, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.shadowBlur = 0
+  }
+
+  // Boss charge windup telegraph — pulsing white glow
+  if (enemy.type === 'boss' && enemy.chargeWindupTimer > 0) {
+    const windupRatio = enemy.chargeWindupTimer / S.BOSS_ENEMY.chargeWindup
+    const pulseAlpha = windupRatio * (0.5 + Math.sin(now * 0.04) * 0.3)
+    ctx.strokeStyle = `rgba(255, 255, 255, ${pulseAlpha})`
+    ctx.lineWidth = 4
+    ctx.shadowColor = '#ffffff'
+    ctx.shadowBlur = 20 * windupRatio
+    ctx.beginPath()
+    ctx.arc(0, 0, enemy.size + 8, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.shadowBlur = 0
+  }
+
   // Attack telegraph — pulsing ring warns player when enemy is about to strike
   if ((enemy.type === 'normal' || enemy.type === 'fast') && !enemy.isAttacking) {
     const thresh = S.TELEGRAPH_THRESHOLD
@@ -1289,10 +1334,13 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
 
   // Draw by type
   switch (enemy.type) {
-    case 'normal':  drawNormalEnemy(ctx, enemy, now, hpRatio); break
-    case 'sniper':  drawSniperEnemy(ctx, enemy, now, hpRatio); break
-    case 'heavy':   drawHeavyEnemy(ctx, enemy, now, hpRatio);  break
-    case 'fast':    drawFastEnemy(ctx, enemy, now, hpRatio);   break
+    case 'normal':   drawNormalEnemy(ctx, enemy, now, hpRatio);   break
+    case 'sniper':   drawSniperEnemy(ctx, enemy, now, hpRatio);   break
+    case 'heavy':    drawHeavyEnemy(ctx, enemy, now, hpRatio);    break
+    case 'fast':     drawFastEnemy(ctx, enemy, now, hpRatio);     break
+    case 'shielder': drawShielderEnemy(ctx, enemy, now, hpRatio); break
+    case 'spawner':  drawSpawnerEnemy(ctx, enemy, now, hpRatio);  break
+    case 'boss':     drawBossEnemy(ctx, enemy, now, hpRatio);     break
   }
 
   ctx.shadowBlur = 0
@@ -1489,6 +1537,303 @@ function drawCracks(ctx: CanvasRenderingContext2D, size: number, hpRatio: number
     }
   }
   ctx.globalAlpha = 1
+}
+
+function drawShielderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, _now: number, hpRatio: number): void {
+  const s = enemy.size
+  const color = enemy.flashTimer > 0 ? S.HIT_FLASH_COLOR : enemy.color
+  // Hexagon body
+  ctx.fillStyle = color
+  ctx.beginPath()
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6
+    const x = Math.cos(a) * s
+    const y = Math.sin(a) * s
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+  ctx.fill()
+  // Inner hexagon outline
+  ctx.strokeStyle = color + '66'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6
+    const x = Math.cos(a) * s * 0.6
+    const y = Math.sin(a) * s * 0.6
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+  ctx.stroke()
+  // Shield arc — only shown when HP > 50% (defensive mode)
+  if (hpRatio > 0.5) {
+    const shieldColor = '#aaddff'
+    ctx.save()
+    ctx.rotate(enemy.shieldFacing)
+    ctx.strokeStyle = shieldColor
+    ctx.lineWidth = 3
+    ctx.shadowColor = shieldColor
+    ctx.shadowBlur = 12
+    ctx.beginPath()
+    ctx.arc(0, 0, s + 8, -Math.PI / 3, Math.PI / 3)
+    ctx.stroke()
+    // Shield glow tips
+    ctx.lineWidth = 1.5
+    ctx.shadowBlur = 6
+    for (const tipAngle of [-Math.PI / 3, Math.PI / 3]) {
+      ctx.beginPath()
+      ctx.arc(Math.cos(tipAngle) * (s + 8), Math.sin(tipAngle) * (s + 8), 3, 0, Math.PI * 2)
+      ctx.strokeStyle = '#ffffff'
+      ctx.stroke()
+    }
+    ctx.shadowBlur = 0
+    ctx.restore()
+  } else {
+    // Aggressive mode — shield turns orange
+    ctx.save()
+    ctx.rotate(enemy.shieldFacing)
+    ctx.strokeStyle = '#ff8844'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, s + 6, -Math.PI / 4, Math.PI / 4)
+    ctx.stroke()
+    ctx.restore()
+  }
+  // Core dot
+  ctx.fillStyle = '#ffffff44'
+  ctx.beginPath()
+  ctx.arc(0, 0, s * 0.22, 0, Math.PI * 2)
+  ctx.fill()
+  drawCracks(ctx, s, hpRatio, color)
+}
+
+function drawSpawnerEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, now: number, hpRatio: number): void {
+  const s = enemy.size
+  const color = enemy.flashTimer > 0 ? S.HIT_FLASH_COLOR : enemy.color
+  const exhausted = enemy.spawnCount >= enemy.maxSpawns
+  // Pulsing body scale
+  const pulse = exhausted ? 1.0 : 1 + Math.sin(now * 0.004) * 0.15
+  ctx.save()
+  ctx.scale(pulse, pulse)
+  // Main circle
+  ctx.fillStyle = exhausted ? '#666666' : color
+  ctx.beginPath()
+  ctx.arc(0, 0, s, 0, Math.PI * 2)
+  ctx.fill()
+  // Inner ring
+  ctx.strokeStyle = (exhausted ? '#888888' : color) + '88'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(0, 0, s * 0.65, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+  // 4 orbiting spawn-particle dots
+  if (!exhausted) {
+    const orbitR = s + 10
+    const orbitSpeed = now * 0.002
+    for (let i = 0; i < 4; i++) {
+      const a = orbitSpeed + (i / 4) * Math.PI * 2
+      ctx.fillStyle = color + 'cc'
+      ctx.beginPath()
+      ctx.arc(Math.cos(a) * orbitR, Math.sin(a) * orbitR, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+  // Spawn count remaining (center text)
+  const remaining = Math.max(0, enemy.maxSpawns - enemy.spawnCount)
+  ctx.fillStyle = exhausted ? '#555555' : '#ffffff'
+  ctx.font = `bold ${Math.round(s * 0.8)}px monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(String(remaining), 0, 0)
+  ctx.textBaseline = 'alphabetic'
+  drawCracks(ctx, s, hpRatio, color)
+}
+
+function drawBossEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, now: number, hpRatio: number): void {
+  const s = enemy.size
+  const color = enemy.flashTimer > 0 ? S.HIT_FLASH_COLOR : enemy.color
+  const phase = enemy.bossPhase ?? 1
+  const chargeActive = enemy.isCharging ?? false
+  // Motion blur trail during charge
+  if (chargeActive) {
+    for (let ghost = 3; ghost >= 1; ghost--) {
+      const offsetX = -(enemy.chargeDir?.x ?? 0) * ghost * 12
+      const offsetY = -(enemy.chargeDir?.y ?? 0) * ghost * 12
+      ctx.globalAlpha = 0.12 * (4 - ghost) / 3
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(offsetX, offsetY, s, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+  }
+  // Main body
+  ctx.fillStyle = color
+  ctx.shadowColor = color
+  ctx.shadowBlur = 25
+  ctx.beginPath()
+  ctx.arc(0, 0, s, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  // Phase 1+: spinning outer ring of 8 spikes
+  {
+    const spikeRot = now * 0.0015
+    ctx.save()
+    ctx.rotate(spikeRot)
+    ctx.strokeStyle = color + 'cc'
+    ctx.lineWidth = 2
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(a) * s * 1.1, Math.sin(a) * s * 1.1)
+      ctx.lineTo(Math.cos(a) * (s * 1.1 + 12), Math.sin(a) * (s * 1.1 + 12))
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+  // Phase 2+: orbiting halo ring of 12 dots
+  if (phase >= 2) {
+    const haloRot = -(now * 0.0022)
+    const haloR = s + 22
+    for (let i = 0; i < 12; i++) {
+      const a = haloRot + (i / 12) * Math.PI * 2
+      const dotAlpha = 0.6 + Math.sin(now * 0.003 + i) * 0.3
+      ctx.fillStyle = `rgba(220, 100, 255, ${dotAlpha})`
+      ctx.shadowColor = '#dd66ff'
+      ctx.shadowBlur = 6
+      ctx.beginPath()
+      ctx.arc(Math.cos(a) * haloR, Math.sin(a) * haloR, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.shadowBlur = 0
+  }
+  // Phase 3: red-purple tint overlay + cracks
+  if (phase >= 3) {
+    ctx.fillStyle = 'rgba(200, 0, 80, 0.25)'
+    ctx.beginPath()
+    ctx.arc(0, 0, s, 0, Math.PI * 2)
+    ctx.fill()
+    drawCracks(ctx, s, hpRatio, '#ff0055')
+  }
+  // Core bright center
+  ctx.fillStyle = '#ffffff33'
+  ctx.beginPath()
+  ctx.arc(0, 0, s * 0.25, 0, Math.PI * 2)
+  ctx.fill()
+  // Phase label inside body
+  ctx.fillStyle = '#ffffff66'
+  ctx.font = `bold ${Math.round(s * 0.45)}px monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(`P${phase}`, 0, 0)
+  ctx.textBaseline = 'alphabetic'
+}
+
+// ─── Off-Screen Enemy Indicators ─────────────────────────────────────────────
+
+function drawOffScreenIndicators(
+  ctx: CanvasRenderingContext2D,
+  enemies: Enemy[],
+  camera: Camera,
+  w: number,
+  h: number,
+): void {
+  const MARGIN = 28
+  for (const enemy of enemies) {
+    if (!enemy.isAlive) continue
+    const screenX = enemy.pos.x + camera.offsetX
+    const screenY = enemy.pos.y + camera.offsetY
+    // Check if off-screen (with a buffer)
+    const offLeft = screenX < -enemy.size
+    const offRight = screenX > w + enemy.size
+    const offTop = screenY < -enemy.size
+    const offBottom = screenY > h + enemy.size
+    if (!offLeft && !offRight && !offTop && !offBottom) continue
+    // Angle from screen center toward enemy
+    const angle = Math.atan2(screenY - h / 2, screenX - w / 2)
+    // Clamp indicator to screen edge
+    const clampedX = Math.max(MARGIN, Math.min(w - MARGIN, w / 2 + Math.cos(angle) * (w / 2 - MARGIN)))
+    const clampedY = Math.max(MARGIN, Math.min(h - MARGIN, h / 2 + Math.sin(angle) * (h / 2 - MARGIN)))
+    const isBoss = enemy.type === 'boss'
+    const arrowSize = isBoss ? 14 : 9
+    ctx.save()
+    ctx.translate(clampedX, clampedY)
+    ctx.rotate(angle)
+    // Glow for boss
+    if (isBoss) {
+      ctx.shadowColor = enemy.color
+      ctx.shadowBlur = 12 + Math.sin(Date.now() * 0.004) * 5
+    }
+    // Arrow triangle
+    ctx.fillStyle = enemy.color
+    ctx.globalAlpha = isBoss ? 0.95 : 0.75
+    ctx.beginPath()
+    ctx.moveTo(arrowSize, 0)
+    ctx.lineTo(-arrowSize * 0.7, -arrowSize * 0.55)
+    ctx.lineTo(-arrowSize * 0.7, arrowSize * 0.55)
+    ctx.closePath()
+    ctx.fill()
+    ctx.shadowBlur = 0
+    ctx.globalAlpha = 1
+    ctx.restore()
+  }
+}
+
+// ─── Boss Health Bar ──────────────────────────────────────────────────────────
+
+function drawBossHealthBar(
+  ctx: CanvasRenderingContext2D,
+  enemies: Enemy[],
+  w: number,
+  _h: number,
+): void {
+  const boss = enemies.find(e => e.type === 'boss' && e.isAlive)
+  if (!boss) return
+  const barW = 400
+  const barH = 18
+  const barX = w / 2 - barW / 2
+  const barY = 28
+  const hpRatio = boss.hp / boss.maxHp
+  const phase = boss.bossPhase ?? 1
+  // Background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'
+  roundRect(ctx, barX - 4, barY - 4, barW + 8, barH + 8, 5)
+  ctx.fill()
+  // HP fill color based on phase
+  const fillColor = hpRatio > 0.66 ? '#22cc66' : hpRatio > 0.33 ? '#ffaa22' : '#ff2244'
+  ctx.fillStyle = fillColor
+  ctx.shadowColor = fillColor
+  ctx.shadowBlur = 8
+  roundRect(ctx, barX, barY, barW * hpRatio, barH, 3)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  // Phase dividers at 66% and 33%
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)'
+  ctx.lineWidth = 2
+  for (const threshold of [0.66, 0.33]) {
+    const divX = barX + barW * threshold
+    ctx.beginPath()
+    ctx.moveTo(divX, barY - 2)
+    ctx.lineTo(divX, barY + barH + 2)
+    ctx.stroke()
+  }
+  // Border
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'
+  ctx.lineWidth = 1
+  roundRect(ctx, barX, barY, barW, barH, 3)
+  ctx.stroke()
+  // Labels
+  ctx.fillStyle = '#ffffff'
+  ctx.font = 'bold 12px monospace'
+  ctx.textAlign = 'center'
+  ctx.fillText('BOSS', w / 2, barY - 8)
+  ctx.fillStyle = '#ffffff88'
+  ctx.font = '10px monospace'
+  ctx.fillText(`${boss.hp} / ${boss.maxHp}  [Phase ${phase}]`, w / 2, barY + barH + 14)
+  ctx.textAlign = 'left'
 }
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
@@ -2069,6 +2414,10 @@ function drawGameOver(
   h: number,
   isDailyChallenge?: boolean,
   dailyLeaderboard?: DailyEntry[],
+  totalKills = 0,
+  totalDamageDealt = 0,
+  contractsCompleted = 0,
+  mutatorsCount = 0,
 ): void {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
   ctx.fillRect(0, 0, w, h)
@@ -2078,12 +2427,12 @@ function drawGameOver(
   ctx.shadowBlur = 30
   ctx.font = 'bold 56px monospace'
   ctx.textAlign = 'center'
-  ctx.fillText('SHADOW FALLS', w / 2, h / 2 - 100)
+  ctx.fillText('SHADOW FALLS', w / 2, h / 2 - 110)
 
   ctx.shadowBlur = 0
   ctx.fillStyle = '#ffffff66'
   ctx.font = '16px monospace'
-  ctx.fillText(`Reached Level ${level}`, w / 2, h / 2 - 55)
+  ctx.fillText(`Reached Level ${level}`, w / 2, h / 2 - 65)
 
   // Death Recap - find top damage source
   const topDamageType = getTopDamageSource(damageByEnemyType)
@@ -2094,35 +2443,81 @@ function drawGameOver(
   if (topDamageType !== 'none') {
     ctx.fillStyle = '#ffffff88'
     ctx.font = '14px monospace'
-    ctx.fillText('Most damage from:', w / 2, h / 2 - 20)
+    ctx.fillText('Most damage from:', w / 2, h / 2 - 30)
 
     ctx.fillStyle = topDamageColor
     ctx.shadowColor = topDamageColor
     ctx.shadowBlur = 10
     ctx.font = 'bold 18px monospace'
-    ctx.fillText(topDamageType.toUpperCase(), w / 2, h / 2 + 5)
+    ctx.fillText(topDamageType.toUpperCase(), w / 2, h / 2 - 8)
     ctx.shadowBlur = 0
   }
 
   // Show hint
   ctx.fillStyle = '#aaaaaa'
   ctx.font = '13px monospace'
-  ctx.fillText(hint, w / 2, h / 2 + 35)
+  ctx.fillText(hint, w / 2, h / 2 + 20)
+
+  // Run stats card
+  {
+    const cardW = 320
+    const cardH = 66
+    const cardX = w / 2 - cardW / 2
+    const cardY = h / 2 + 35
+    ctx.fillStyle = 'rgba(255,255,255,0.05)'
+    roundRect(ctx, cardX, cardY, cardW, cardH, 6)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+    ctx.lineWidth = 1
+    roundRect(ctx, cardX, cardY, cardW, cardH, 6)
+    ctx.stroke()
+
+    // Divider line between columns
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.moveTo(cardX + cardW / 2, cardY + 8)
+    ctx.lineTo(cardX + cardW / 2, cardY + cardH - 8)
+    ctx.stroke()
+
+    const colW = cardW / 2   // 160px each
+    const pad = 12
+    const rows = [
+      [{ label: 'KILLS', val: String(totalKills) }, { label: 'DAMAGE', val: totalDamageDealt.toLocaleString() }],
+      [{ label: 'MUTATORS', val: String(mutatorsCount) }, { label: 'CONTRACTS', val: String(contractsCompleted) }],
+    ]
+    rows.forEach((row, ri) => {
+      const y = cardY + 24 + ri * 22
+      row.forEach((item, ci) => {
+        const cellLeft = cardX + ci * colW
+        // Label — left-aligned inside cell
+        ctx.fillStyle = '#ffffff55'
+        ctx.font = '10px monospace'
+        ctx.textAlign = 'left'
+        ctx.fillText(item.label, cellLeft + pad, y)
+        // Value — right-aligned inside cell
+        ctx.fillStyle = '#ffffffdd'
+        ctx.font = 'bold 12px monospace'
+        ctx.textAlign = 'right'
+        ctx.fillText(item.val, cellLeft + colW - pad, y)
+      })
+    })
+    ctx.textAlign = 'center'
+  }
 
   // Score
   ctx.fillStyle = '#ffffffcc'
   ctx.font = '20px monospace'
-  ctx.fillText(`SCORE: ${score}`, w / 2, h / 2 + 75)
+  ctx.fillText(`SCORE: ${score}`, w / 2, h / 2 + 110)
 
   if (score >= highScore && highScore > 0) {
     ctx.fillStyle = '#ffaa22'
     ctx.font = 'bold 16px monospace'
-    ctx.fillText('NEW HIGH SCORE!', w / 2, h / 2 + 105)
+    ctx.fillText('NEW HIGH SCORE!', w / 2, h / 2 + 135)
   }
 
   ctx.fillStyle = '#ffffff66'
   ctx.font = '14px monospace'
-  ctx.fillText('Press R to restart', w / 2, h / 2 + 145)
+  ctx.fillText('Press R to restart', w / 2, h / 2 + 165)
   ctx.textAlign = 'left'
 
   // Daily Challenge leaderboard

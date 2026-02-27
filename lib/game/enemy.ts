@@ -3,7 +3,7 @@ import * as S from './settings'
 import type { Player } from './player'
 import { WaveAffix, EnemyAffixState, createEnemyAffixState } from './affixes'
 
-export type EnemyType = 'normal' | 'sniper' | 'heavy' | 'fast'
+export type EnemyType = 'normal' | 'sniper' | 'heavy' | 'fast' | 'shielder' | 'spawner' | 'boss'
 
 export interface Enemy {
   id: number
@@ -38,6 +38,22 @@ export interface Enemy {
   // Affix system
   affixState: EnemyAffixState
   baseDamage: number // Original damage before affix modifiers
+  // Shielder specific
+  shieldFacing: number      // angle the shield faces (radians)
+  // Spawner specific
+  spawnTimer: number        // countdown to next spawn
+  spawnCount: number        // spawns created so far
+  maxSpawns: number         // cap before spawner exhausts
+  pendingSpawn: boolean     // signals engine to create a Normal nearby
+  // Boss specific
+  bossPhase: number         // 1 | 2 | 3 — driven by HP thresholds
+  isCharging: boolean
+  chargeTimer: number       // active charge duration remaining
+  chargeWindupTimer: number // pre-charge telegraph remaining
+  chargeCooldownTimer: number
+  chargeDir: Vec2           // direction locked at windup end
+  ringPulseTimer: number    // countdown to next ring pulse (phase 2+)
+  bossSpawnedMinions: boolean // phase 3 one-time spawn flag
 }
 
 let nextId = 0
@@ -50,11 +66,14 @@ export function createEnemy(
   affix: WaveAffix | null = null,
   presetMults?: { hp: number; speed: number; damage: number },
 ): Enemy {
-  const configs: Record<EnemyType, typeof S.NORMAL_ENEMY & { preferredDistance?: number; dodgeChance?: number; shockwaveRange?: number }> = {
+  const configs: Record<EnemyType, { hp: number; speed: number; damage: number; attackRange: number; attackCooldown: number; color: string; [key: string]: unknown }> = {
     normal: S.NORMAL_ENEMY,
     sniper: S.SNIPER_ENEMY,
     heavy: S.HEAVY_ENEMY,
     fast: S.FAST_ENEMY,
+    shielder: S.SHIELDER_ENEMY,
+    spawner: S.SPAWNER_ENEMY,
+    boss: S.BOSS_ENEMY,
   }
   const cfg = configs[type]
 
@@ -93,7 +112,7 @@ export function createEnemy(
     isAttacking: false,
     attackAnimTimer: 0,
     color: cfg.color,
-    size: type === 'heavy' ? 26 : S.ENEMY_SIZE,
+    size: type === 'boss' ? S.BOSS_ENEMY.size : type === 'heavy' ? 26 : S.ENEMY_SIZE,
     isAlive: true,
     flashTimer: 0,
     knockbackVel: vec2(0, 0),
@@ -104,9 +123,25 @@ export function createEnemy(
     dodgeCooldown: 0,
     shockwaveActive: false,
     shockwaveTimer: 0,
-    shockwaveRange: (cfg as typeof S.HEAVY_ENEMY).shockwaveRange || 0,
+    shockwaveRange: type === 'boss' ? 140 : (cfg as typeof S.HEAVY_ENEMY).shockwaveRange || 0,
     affixState: createEnemyAffixState(affix),
-    baseDamage: scaledDamage,  // preset-scaled value (affix berserker multiplies this)
+    baseDamage: scaledDamage,
+    // Shielder
+    shieldFacing: 0,
+    // Spawner
+    spawnTimer: type === 'spawner' ? S.SPAWNER_ENEMY.spawnInterval : 0,
+    spawnCount: 0,
+    maxSpawns: type === 'spawner' ? S.SPAWNER_ENEMY.maxSpawns : 0,
+    pendingSpawn: false,
+    // Boss
+    bossPhase: 1,
+    isCharging: false,
+    chargeTimer: 0,
+    chargeWindupTimer: 0,
+    chargeCooldownTimer: S.BOSS_ENEMY.chargeCooldown * 0.5,
+    chargeDir: vec2(1, 0),
+    ringPulseTimer: S.BOSS_ENEMY.ringPulseCooldown,
+    bossSpawnedMinions: false,
   }
 }
 
@@ -186,6 +221,15 @@ export function updateEnemy(enemy: Enemy, player: Player, dt: number, timeScale:
       break
     case 'fast':
       updateFastAI(enemy, player, dirToPlayer, distToPlayer, adt)
+      break
+    case 'shielder':
+      updateShielderAI(enemy, player, dirToPlayer, distToPlayer, adt)
+      break
+    case 'spawner':
+      updateSpawnerAI(enemy, adt)
+      break
+    case 'boss':
+      updateBossAI(enemy, player, dirToPlayer, distToPlayer, adt)
       break
   }
 
@@ -280,6 +324,125 @@ function updateFastAI(enemy: Enemy, player: Player, dir: Vec2, dist: number, dt:
       enemy.attackTimer = enemy.attackCooldown
     }
     enemy.vel = scale(dir, enemy.speed * 0.5)
+  }
+}
+
+function updateShielderAI(enemy: Enemy, player: Player, dir: Vec2, dist: number, dt: number): void {
+  // Shield always tracks player direction
+  enemy.shieldFacing = angleBetween(enemy.pos, player.pos)
+
+  const hpRatio = enemy.hp / enemy.maxHp
+  if (hpRatio > 0.5) {
+    // Defensive: approach slowly, hold at ~60px
+    if (dist > enemy.attackRange + 20) {
+      enemy.vel = scale(dir, enemy.speed * 0.7)
+    } else {
+      enemy.vel = vec2(0, 0)
+      if (enemy.attackTimer <= 0 && !enemy.isAttacking) {
+        enemy.isAttacking = true
+        enemy.attackAnimTimer = 0.35
+        enemy.attackTimer = enemy.attackCooldown
+      }
+    }
+  } else {
+    // Aggressive at low HP: charge at full speed, shield no longer protects
+    enemy.vel = scale(dir, enemy.speed * 1.5)
+    if (dist <= enemy.attackRange + 5 && enemy.attackTimer <= 0 && !enemy.isAttacking) {
+      enemy.isAttacking = true
+      enemy.attackAnimTimer = 0.25
+      enemy.attackTimer = enemy.attackCooldown * 0.7
+    }
+  }
+}
+
+function updateSpawnerAI(enemy: Enemy, dt: number): void {
+  // Drift toward arena center
+  const dx = S.ARENA_CENTER_X - enemy.pos.x
+  const dy = S.ARENA_CENTER_Y - enemy.pos.y
+  const d = Math.sqrt(dx * dx + dy * dy)
+  if (d > 80) {
+    enemy.vel = scale(normalize(vec2(dx, dy)), enemy.speed)
+  } else {
+    enemy.vel = vec2(0, 0)
+  }
+
+  // Spawn timer
+  if (enemy.spawnCount < enemy.maxSpawns) {
+    enemy.spawnTimer -= dt
+    if (enemy.spawnTimer <= 0) {
+      enemy.pendingSpawn = true
+      enemy.spawnCount++
+      enemy.spawnTimer = S.SPAWNER_ENEMY.spawnInterval
+    }
+  }
+}
+
+function updateBossAI(enemy: Enemy, player: Player, dir: Vec2, dist: number, dt: number): void {
+  // Phase transitions based on HP
+  const hpRatio = enemy.hp / enemy.maxHp
+  const prevPhase = enemy.bossPhase
+  if (hpRatio <= 0.33 && enemy.bossPhase < 3) {
+    enemy.bossPhase = 3
+    if (!enemy.bossSpawnedMinions) {
+      enemy.pendingSpawn = true
+      enemy.bossSpawnedMinions = true
+    }
+  } else if (hpRatio <= 0.66 && enemy.bossPhase < 2) {
+    enemy.bossPhase = 2
+    enemy.speed += 15
+  }
+  if (prevPhase < enemy.bossPhase && enemy.bossPhase === 2) {
+    enemy.speed += 15 // speed boost on phase 3
+  }
+
+  // Charge behavior (all phases)
+  if (enemy.isCharging) {
+    enemy.chargeTimer -= dt
+    enemy.vel = scale(enemy.chargeDir, S.BOSS_ENEMY.chargeSpeed)
+    if (enemy.chargeTimer <= 0 || dist < enemy.size + 20) {
+      enemy.isCharging = false
+      enemy.isAttacking = true
+      enemy.attackAnimTimer = 0.3
+      enemy.chargeCooldownTimer = S.BOSS_ENEMY.chargeCooldown
+    }
+    return
+  }
+
+  if (enemy.chargeWindupTimer > 0) {
+    enemy.chargeWindupTimer -= dt
+    enemy.vel = scale(dir, enemy.speed * 0.3) // slow creep during windup
+    if (enemy.chargeWindupTimer <= 0) {
+      enemy.isCharging = true
+      enemy.chargeTimer = S.BOSS_ENEMY.chargeDuration
+      enemy.chargeDir = dir
+    }
+    return
+  }
+
+  // Cooldown between charges
+  enemy.chargeCooldownTimer -= dt
+  if (enemy.chargeCooldownTimer <= 0) {
+    enemy.chargeWindupTimer = S.BOSS_ENEMY.chargeWindup
+  }
+
+  // Default movement: orbit/chase
+  if (dist > 100) {
+    enemy.vel = scale(dir, enemy.speed * 0.6)
+  } else {
+    enemy.vel = vec2(0, 0)
+  }
+
+  // Ring pulse (phase 2+)
+  if (enemy.bossPhase >= 2) {
+    enemy.ringPulseTimer -= dt
+    if (enemy.ringPulseTimer <= 0) {
+      enemy.shockwaveActive = true
+      enemy.shockwaveTimer = 0.5
+      enemy.shockwaveRange = 140
+      enemy.isAttacking = true
+      enemy.attackAnimTimer = 0.5
+      enemy.ringPulseTimer = S.BOSS_ENEMY.ringPulseCooldown
+    }
   }
 }
 

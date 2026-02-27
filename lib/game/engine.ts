@@ -1,6 +1,6 @@
 import { Player, createPlayer, updatePlayer, InputState, AttackType } from './player'
 import { Question, getQuestion } from './questions'
-import { Enemy, EnemyType, updateEnemy } from './enemy'
+import { Enemy, EnemyType, updateEnemy, createEnemy } from './enemy'
 import { distance, normalize, sub, scale, add } from './vec2'
 import { Camera, createCamera, shakeCamera, updateCamera } from './camera'
 import { ParticleSystem, createParticleSystem, updateParticles, emitHitSparks, emitPulseWave, emitDeathExplosion, emitTypedDeathExplosion, emitAffixDeathEffect, emitAmbientParticle } from './particles'
@@ -11,7 +11,7 @@ import { AssetCache } from './assetLoader'
 import { LevelTheme, Obstacle, Hazard, getLevelTheme, getLevelNumber, isLevelTransition, generateObstacles, generateHazards } from './levels'
 import * as S from './settings'
 import { setArenaRadius, DifficultyLevel, DIFFICULTY_PRESETS, DifficultyPreset } from './settings'
-import { Mutator, MutatorModifiers, getRandomMutators, computeCombinedModifiers } from './mutators'
+import { Mutator, MutatorModifiers, getRandomMutators, getEpicMutators, computeCombinedModifiers } from './mutators'
 import {
   ContractState,
   ConsumableType,
@@ -134,6 +134,12 @@ export interface GameState {
   // ── Pause menu ───────────────────────────────────────────────────────────────
   paused: boolean
   pauseMenuSelection: number     // 0=Resume, 1=Restart, 2=Return to Title
+  // ── Run stats ────────────────────────────────────────────────────────────────
+  totalKills: number
+  totalDamageDealt: number
+  contractsCompleted: number
+  // ── Boss system ──────────────────────────────────────────────────────────────
+  bossWaveCompleted: boolean     // next mutator draft forces 3 epics
 }
 
 /** Returns the active DifficultyPreset, respecting Classroom (grade-split) and Daily overrides. */
@@ -200,13 +206,13 @@ export function createGameState(isDailyChallenge = false, selectedGrade = 1, qui
     mutatorSelectionInput: null,
     // Contract system
     contractState: createContractState(),
-    originalEnemyCounts: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
+    originalEnemyCounts: { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 },
     // Last Stand system
     lastStandUsed: false,
     lastStandActive: false,
     lastStandTimer: 0,
     // Death recap
-    damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
+    damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 },
     // Damage feedback
     damageFlashTimer: 0,
     damageDir: { x: 0, y: 0 },
@@ -244,6 +250,12 @@ export function createGameState(isDailyChallenge = false, selectedGrade = 1, qui
     pendingMutatorIndex: 0,
     paused: false,
     pauseMenuSelection: 0,
+    // Run stats
+    totalKills: 0,
+    totalDamageDealt: 0,
+    contractsCompleted: 0,
+    // Boss
+    bossWaveCompleted: false,
   }
 }
 
@@ -544,6 +556,36 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     updateEnemy(enemy, state.player, dt, state.timeScale)
   }
 
+  // Handle spawner/boss pendingSpawn — create new Normal enemies
+  {
+    const diffPreset = getEffectivePreset(state)
+    const presetMults = { hp: diffPreset.enemyHpMult, speed: diffPreset.enemySpeedMult, damage: diffPreset.enemyDamageMult }
+    const difficultyMult = state.levelTheme.difficultyMult
+    const newEnemies: Enemy[] = []
+    for (const enemy of state.enemies) {
+      if (!enemy.pendingSpawn) continue
+      enemy.pendingSpawn = false
+      if (enemy.type === 'spawner') {
+        const count = Math.floor(rng() * 2) + 1
+        for (let i = 0; i < count; i++) {
+          const ang = rng() * Math.PI * 2
+          const d = 30 + rng() * 20
+          newEnemies.push(createEnemy('normal', enemy.pos.x + Math.cos(ang) * d, enemy.pos.y + Math.sin(ang) * d, difficultyMult, state.currentAffix, presetMults))
+        }
+      } else if (enemy.type === 'boss') {
+        // Phase 3 minion spawn
+        for (let i = 0; i < 3; i++) {
+          const ang = rng() * Math.PI * 2
+          const d = enemy.size + 30 + rng() * 30
+          newEnemies.push(createEnemy('normal', enemy.pos.x + Math.cos(ang) * d, enemy.pos.y + Math.sin(ang) * d, difficultyMult, state.currentAffix, presetMults))
+        }
+        emitHitSparks(state.particles, enemy.pos, S.ENEMY_COLORS.boss, 20)
+        shakeCamera(state.camera, 14, 0.35)
+      }
+    }
+    state.enemies = state.enemies.concat(newEnemies)
+  }
+
   // Enemy-obstacle collision (push enemies out of pillars)
   for (const enemy of state.enemies) {
     if (!enemy.isAlive) continue
@@ -582,6 +624,9 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     emitHitSparks(state.particles, effect.pos, effect.type === 'pulse' ? '#7b2fff' : '#ffffff', effect.type === 'heavy' ? 15 : 8)
   }
   state.score += playerCombat.enemiesKilled * 50
+  // Run stats tracking
+  state.totalKills += playerCombat.enemiesKilled
+  state.totalDamageDealt += playerCombat.damageHits.reduce((s, h) => s + h.damage, 0)
 
   // Spawn floating damage numbers
   for (const hit of playerCombat.damageHits) {
@@ -950,9 +995,11 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       audio.playWaveStart(state.wave)
 
       // Contract system - count enemies and select contract
-      state.originalEnemyCounts = { normal: 0, sniper: 0, heavy: 0, fast: 0 }
+      state.originalEnemyCounts = { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 }
       for (const e of state.enemies) {
-        state.originalEnemyCounts[e.type]++
+        if (e.type in state.originalEnemyCounts) {
+          state.originalEnemyCounts[e.type]++
+        }
       }
       const enemyTypes = [...new Set(state.enemies.map((e) => e.type))] as EnemyType[]
       state.contractState = {
@@ -967,6 +1014,12 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.waveActive = false
       state.waveTimer = S.WAVE_DELAY
       state.score += state.wave * 100
+      // Boss wave reward
+      if (state.wave % S.BOSS_WAVE_INTERVAL === 0) {
+        state.bossWaveCompleted = true
+        state.score += 500 // bonus score for defeating boss
+        shakeCamera(state.camera, 16, 0.5)
+      }
       audio.playWaveEnd()
 
       // Apply wave event score bonus if accepted
@@ -996,6 +1049,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
           if (contract.consumableReward) {
             state.consumables.push(contract.consumableReward)
           }
+          state.contractsCompleted++
         }
       }
 
@@ -1006,7 +1060,13 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       // Trigger mutator selection (after wave 1+)
       if (state.wave >= 1) {
         const ownedIds = state.activeMutators.map((m) => m.id)
-        state.mutatorChoices = getRandomMutators(3, ownedIds)
+        if (state.bossWaveCompleted) {
+          // Boss reward: all 3 choices are epic
+          state.mutatorChoices = getEpicMutators(3, ownedIds)
+          state.bossWaveCompleted = false
+        } else {
+          state.mutatorChoices = getRandomMutators(3, ownedIds)
+        }
         if (state.mutatorChoices.length > 0) {
           state.mutatorSelectionActive = true
           state.mutatorSelectionTimer = 0
@@ -1157,6 +1217,11 @@ export function renderGame(
     // Pause menu
     state.paused,
     state.pauseMenuSelection,
+    // Run stats
+    state.totalKills,
+    state.totalDamageDealt,
+    state.contractsCompleted,
+    state.activeMutators.length,
   )
 }
 

@@ -19,6 +19,9 @@ export const ENEMY_COLORS = {
   sniper: '#ffaa22',
   heavy: '#ff6633',
   fast: '#22ffaa',
+  shielder: '#55bbff',
+  spawner: '#ee55ff',
+  boss: '#cc00ff',
 }
 export const PULSE_WAVE_COLOR = '#6622ff'
 export const NEON_GLOW = '#7b2fff'
@@ -141,6 +144,43 @@ export const FAST_ENEMY = {
   color: ENEMY_COLORS.fast,
 }
 
+export const SHIELDER_ENEMY = {
+  hp: 70,
+  speed: 70,
+  damage: 14,
+  attackRange: 50,
+  attackCooldown: 1.8,
+  color: ENEMY_COLORS.shielder,
+}
+
+export const SPAWNER_ENEMY = {
+  hp: 45,
+  speed: 35,
+  damage: 0,
+  attackRange: 0,
+  attackCooldown: 999,
+  color: ENEMY_COLORS.spawner,
+  spawnInterval: 3.5,
+  maxSpawns: 4,
+}
+
+export const BOSS_ENEMY = {
+  hp: 450,
+  speed: 75,
+  damage: 28,
+  size: 40,
+  color: ENEMY_COLORS.boss,
+  attackRange: 70,
+  attackCooldown: 1.0,
+  chargeWindup: 0.65,
+  chargeSpeed: 360,
+  chargeDuration: 0.35,
+  chargeCooldown: 3.0,
+  ringPulseCooldown: 1.8,
+}
+
+export const BOSS_WAVE_INTERVAL = 5 // boss spawns on wave 5, 10, 15, ...
+
 // Contract Banner
 export const CONTRACT_BANNER_Y = 70
 export const CONTRACT_BANNER_HEIGHT = 50
@@ -151,6 +191,9 @@ export const DEATH_HINTS: Record<string, string> = {
   sniper: "Snipers telegraph with a red laser. Dash diagonally when you see it!",
   heavy: "Heavy shockwaves have limited range. Stay outside and strike after!",
   fast: "Fast enemies dodge light attacks. Use heavy or pulse wave to catch them!",
+  shielder: "Shielders block frontal attacks. Circle behind them or use Pulse Wave!",
+  spawner: "Kill Spawners first — they keep adding enemies until you do!",
+  boss: "The Boss telegraphs charges with a bright glow. Dash to the side, then punish!",
   none: "Keep practicing! Use dash (Space/Shift) to avoid damage.",
 }
 

@@ -1,6 +1,7 @@
 import { Enemy, createEnemy, EnemyType } from './enemy'
 import { WaveAffix } from './affixes'
 import { rng } from './seeded-rng'
+import * as S from './settings'
 
 export interface WaveEvent {
   id: string
@@ -68,6 +69,11 @@ export interface WaveConfig {
 }
 
 export function getWaveConfig(wave: number): WaveConfig {
+  // Boss waves — solo encounter every BOSS_WAVE_INTERVAL waves
+  if (wave % S.BOSS_WAVE_INTERVAL === 0) {
+    return { enemies: [{ type: 'boss', count: 1 }] }
+  }
+
   const configs: WaveConfig[] = [
     // Wave 1 - Tutorial: just normals
     { enemies: [{ type: 'normal', count: 3 }] },
@@ -77,27 +83,27 @@ export function getWaveConfig(wave: number): WaveConfig {
     { enemies: [{ type: 'normal', count: 3 }, { type: 'sniper', count: 2 }] },
     // Wave 4
     { enemies: [{ type: 'normal', count: 3 }, { type: 'fast', count: 2 }, { type: 'sniper', count: 1 }] },
-    // Wave 5 - First heavy
+    // Wave 5 - Boss (handled above, never reached)
     { enemies: [{ type: 'heavy', count: 1 }, { type: 'normal', count: 3 }] },
-    // Wave 6
-    { enemies: [{ type: 'fast', count: 3 }, { type: 'sniper', count: 2 }] },
+    // Wave 6 - Introduce Shielder
+    { enemies: [{ type: 'shielder', count: 1 }, { type: 'fast', count: 3 }, { type: 'sniper', count: 1 }] },
     // Wave 7
-    { enemies: [{ type: 'heavy', count: 1 }, { type: 'fast', count: 2 }, { type: 'normal', count: 3 }] },
-    // Wave 8
-    { enemies: [{ type: 'heavy', count: 2 }, { type: 'sniper', count: 2 }, { type: 'fast', count: 2 }] },
+    { enemies: [{ type: 'heavy', count: 1 }, { type: 'shielder', count: 1 }, { type: 'fast', count: 2 }, { type: 'normal', count: 2 }] },
+    // Wave 8 - Introduce Spawner
+    { enemies: [{ type: 'heavy', count: 1 }, { type: 'spawner', count: 1 }, { type: 'sniper', count: 2 }, { type: 'fast', count: 1 }] },
     // Wave 9
-    { enemies: [{ type: 'heavy', count: 2 }, { type: 'fast', count: 3 }, { type: 'sniper', count: 2 }] },
-    // Wave 10
+    { enemies: [{ type: 'shielder', count: 1 }, { type: 'spawner', count: 1 }, { type: 'fast', count: 2 }, { type: 'normal', count: 2 }] },
+    // Wave 10 - Boss (handled above, never reached)
     { enemies: [{ type: 'heavy', count: 3 }, { type: 'sniper', count: 3 }, { type: 'fast', count: 2 }] },
     // Wave 11
-    { enemies: [{ type: 'heavy', count: 2 }, { type: 'fast', count: 4 }, { type: 'sniper', count: 3 }] },
+    { enemies: [{ type: 'heavy', count: 2 }, { type: 'shielder', count: 1 }, { type: 'spawner', count: 1 }, { type: 'fast', count: 3 }, { type: 'sniper', count: 2 }] },
     // Wave 12
-    { enemies: [{ type: 'heavy', count: 3 }, { type: 'sniper', count: 4 }, { type: 'fast', count: 3 }, { type: 'normal', count: 2 }] },
+    { enemies: [{ type: 'heavy', count: 2 }, { type: 'shielder', count: 2 }, { type: 'sniper', count: 3 }, { type: 'fast', count: 2 }, { type: 'normal', count: 1 }] },
     // Wave 13
-    { enemies: [{ type: 'heavy', count: 3 }, { type: 'fast', count: 5 }, { type: 'sniper', count: 3 }] },
+    { enemies: [{ type: 'heavy', count: 2 }, { type: 'shielder', count: 2 }, { type: 'spawner', count: 1 }, { type: 'fast', count: 3 }, { type: 'sniper', count: 2 }] },
     // Wave 14
-    { enemies: [{ type: 'heavy', count: 4 }, { type: 'sniper', count: 4 }, { type: 'fast', count: 4 }] },
-    // Wave 15
+    { enemies: [{ type: 'heavy', count: 3 }, { type: 'shielder', count: 2 }, { type: 'sniper', count: 3 }, { type: 'fast', count: 3 }] },
+    // Wave 15 - Boss (handled above, never reached)
     { enemies: [{ type: 'heavy', count: 4 }, { type: 'fast', count: 5 }, { type: 'sniper', count: 4 }, { type: 'normal', count: 3 }] },
   ]
 
@@ -111,6 +117,8 @@ export function getWaveConfig(wave: number): WaveConfig {
   const heavies = Math.min(5, 4 + Math.floor(extraWave / 3))
   const snipers = Math.min(5, 4 + Math.floor(extraWave / 3))
   const fasts = Math.min(6, 5 + Math.floor(extraWave / 2))
+  const shielders = Math.min(3, 1 + Math.floor(extraWave / 4))
+  const spawners = Math.min(2, Math.floor(extraWave / 5))
 
   return {
     enemies: [
@@ -118,6 +126,8 @@ export function getWaveConfig(wave: number): WaveConfig {
       { type: 'heavy' as EnemyType, count: heavies },
       { type: 'sniper' as EnemyType, count: snipers },
       { type: 'fast' as EnemyType, count: fasts },
+      { type: 'shielder' as EnemyType, count: shielders },
+      ...(spawners > 0 ? [{ type: 'spawner' as EnemyType, count: spawners }] : []),
     ],
   }
 }
@@ -136,13 +146,22 @@ export function spawnWaveEnemies(
   const enemies: Enemy[] = []
 
   for (const group of config.enemies) {
-    const count = Math.max(1, Math.round(group.count * waveCountMult))
+    // Boss is always solo — never scale count
+    const count = group.type === 'boss' ? 1 : Math.max(1, Math.round(group.count * waveCountMult))
     for (let i = 0; i < count; i++) {
-      // Spawn around the arena edge
-      const angle = rng() * Math.PI * 2
-      const radius = arenaRadius * 0.7 + rng() * arenaRadius * 0.25
-      const x = centerX + Math.cos(angle) * radius
-      const y = centerY + Math.sin(angle) * radius
+      let x: number, y: number
+      if (group.type === 'boss') {
+        // Boss spawns at the far edge, directly above center
+        const angle = rng() * Math.PI * 2
+        x = centerX + Math.cos(angle) * arenaRadius * 0.6
+        y = centerY + Math.sin(angle) * arenaRadius * 0.6
+      } else {
+        // All others spawn around the arena edge
+        const angle = rng() * Math.PI * 2
+        const radius = arenaRadius * 0.7 + rng() * arenaRadius * 0.25
+        x = centerX + Math.cos(angle) * radius
+        y = centerY + Math.sin(angle) * radius
+      }
       enemies.push(createEnemy(group.type, x, y, difficultyMult, affix, presetMults))
     }
   }
