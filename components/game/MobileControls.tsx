@@ -9,7 +9,8 @@ interface Props {
   inputRef: React.MutableRefObject<InputState>
   gameStateRef: React.MutableRefObject<GameState | null>
   canvasRef: React.RefObject<HTMLCanvasElement | null>
-  restartRef: React.MutableRefObject<boolean>
+  onRestart: () => void
+  isPortrait: boolean
 }
 
 // Mutator card hit rects (mirrors renderer.ts constants)
@@ -18,6 +19,9 @@ const CARD_HEIGHT = 320
 const CARD_SPACING = 40
 const CARD_START_X = (GAME_WIDTH - (3 * CARD_WIDTH + 2 * CARD_SPACING)) / 2 // 150
 const CARD_BASE_Y = (GAME_HEIGHT - CARD_HEIGHT) / 2 + 20 // 220
+
+// Portrait mode: canvas occupies top 56.25vw of screen (100vw × 720/1280)
+const PORTRAIT_TOP = '56.25vw'
 
 function getCardIndex(cx: number, cy: number): number {
   for (let i = 0; i < 3; i++) {
@@ -31,7 +35,7 @@ function getCardIndex(cx: number, cy: number): number {
 
 const mono: React.CSSProperties = { fontFamily: 'monospace' }
 
-export default function MobileControls({ inputRef, gameStateRef, canvasRef, restartRef }: Props) {
+export default function MobileControls({ inputRef, gameStateRef, canvasRef, onRestart, isPortrait }: Props) {
   // Guide state
   const [showGuide, setShowGuide] = useState(() =>
     typeof window !== 'undefined' ? !localStorage.getItem('sp_mobile_guide_seen') : false
@@ -42,10 +46,12 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
   const [waveEventPending, setWaveEventPending] = useState(false)
   const [gameOver, setGameOver] = useState(false)
 
-  // Joystick visual state
+  // Joystick — DOM-ref based for zero React re-renders during movement
   const joystickTouchIdRef = useRef<number | null>(null)
-  const [joystickOrigin, setJoystickOrigin] = useState<{ x: number; y: number } | null>(null)
-  const [thumbOffset, setThumbOffset] = useState({ x: 0, y: 0 })
+  const joystickOriginRef = useRef<{ x: number; y: number } | null>(null)
+  const [joystickVisible, setJoystickVisible] = useState(false)
+  const joystickRingRef = useRef<HTMLDivElement>(null)
+  const thumbRef = useRef<HTMLDivElement>(null)
 
   // Button active visual
   const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set())
@@ -54,6 +60,22 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
   const heavyChargingRef = useRef(false)
   const [heavyCharging, setHeavyCharging] = useState(false)
   const prevGameOverRef = useRef(false)
+
+  // Fullscreen
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  useEffect(() => {
+    const onFSChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFSChange)
+    return () => document.removeEventListener('fullscreenchange', onFSChange)
+  }, [])
+  const toggleFullscreen = useCallback((e: React.TouchEvent) => {
+    e.preventDefault()
+    if (document.fullscreenElement) {
+      document.exitFullscreen()
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {})
+    }
+  }, [])
 
   // Poll game state at ~60fps for conditional UI
   useEffect(() => {
@@ -125,14 +147,21 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
     onTouchCancel:(e: React.TouchEvent) => { e.preventDefault(); e.stopPropagation(); handleButtonRelease(action) },
   })
 
-  // ── Joystick ──────────────────────────────────────────────────────────────
+  // ── Joystick (DOM-ref approach — no re-renders during move) ──────────────
   const handleJoystickStart = useCallback((e: React.TouchEvent) => {
     e.preventDefault()
     if (joystickTouchIdRef.current !== null) return
     const t = e.changedTouches[0]
     joystickTouchIdRef.current = t.identifier
-    setJoystickOrigin({ x: t.clientX, y: t.clientY })
-    setThumbOffset({ x: 0, y: 0 })
+    joystickOriginRef.current = { x: t.clientX, y: t.clientY }
+    if (joystickRingRef.current) {
+      joystickRingRef.current.style.left = t.clientX + 'px'
+      joystickRingRef.current.style.top  = t.clientY + 'px'
+    }
+    if (thumbRef.current) {
+      thumbRef.current.style.transform = 'translate(0px,0px)'
+    }
+    setJoystickVisible(true)
   }, [])
 
   const handleJoystickMove = useCallback((e: React.TouchEvent) => {
@@ -143,19 +172,21 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
       if (e.touches[i].identifier === joystickTouchIdRef.current) { touch = e.touches[i]; break }
     }
     if (!touch) return
-    // Read origin from state via ref trick — use a stable ref updated each render
-    setJoystickOrigin(origin => {
-      if (!origin) return origin
-      const dx = touch!.clientX - origin.x
-      const dy = touch!.clientY - origin.y
-      const maxR = 50
-      setThumbOffset({ x: Math.max(-maxR, Math.min(maxR, dx)), y: Math.max(-maxR, Math.min(maxR, dy)) })
-      const thr = 15
-      const input = inputRef.current
-      input.right = dx > thr; input.left = dx < -thr
-      input.down = dy > thr;  input.up   = dy < -thr
-      return origin
-    })
+    const origin = joystickOriginRef.current
+    if (!origin) return
+    const dx = touch.clientX - origin.x
+    const dy = touch.clientY - origin.y
+    const maxR = 50
+    const cx = Math.max(-maxR, Math.min(maxR, dx))
+    const cy = Math.max(-maxR, Math.min(maxR, dy))
+    // Direct DOM update — no React setState, no re-render
+    if (thumbRef.current) {
+      thumbRef.current.style.transform = `translate(${cx * 0.54}px,${cy * 0.54}px)`
+    }
+    const thr = 10
+    const input = inputRef.current
+    input.right = dx > thr;  input.left = dx < -thr
+    input.down  = dy > thr;  input.up   = dy < -thr
   }, [inputRef])
 
   const handleJoystickEnd = useCallback((e: React.TouchEvent) => {
@@ -166,8 +197,9 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
     }
     if (!found) return
     joystickTouchIdRef.current = null
-    setJoystickOrigin(null)
-    setThumbOffset({ x: 0, y: 0 })
+    joystickOriginRef.current = null
+    setJoystickVisible(false)
+    if (thumbRef.current) thumbRef.current.style.transform = 'translate(0px,0px)'
     const input = inputRef.current
     input.up = false; input.down = false; input.left = false; input.right = false
   }, [inputRef])
@@ -189,20 +221,21 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
   // ── Restart ────────────────────────────────────────────────────────────────
   const handleRestart = useCallback((e: React.TouchEvent) => {
     e.preventDefault()
-    restartRef.current = true
+    e.stopPropagation()
+    onRestart()
     heavyChargingRef.current = false
     setHeavyCharging(false)
-  }, [restartRef])
+  }, [onRestart])
 
   // ── Styles ─────────────────────────────────────────────────────────────────
-  const BTN = 'clamp(52px, 13vmin, 72px)'
-  const SMALL = '44px'
+  const BTN = isPortrait ? 'clamp(56px, 16vmin, 88px)' : 'clamp(52px, 13vmin, 72px)'
+  const SMALL = isPortrait ? '52px' : '44px'
 
   const btnBase = (action: string, accent = '255,255,255', extra?: React.CSSProperties): React.CSSProperties => ({
     width: BTN, height: BTN, borderRadius: '50%',
-    background: activeButtons.has(action) ? `rgba(${accent},0.4)` : `rgba(${accent},0.08)`,
-    border: `2px solid rgba(${accent},0.35)`,
-    color: `rgba(${accent},0.95)`,
+    background: activeButtons.has(action) ? `rgba(${accent},0.38)` : `rgba(${accent},0.05)`,
+    border: `2px solid rgba(${accent},0.22)`,
+    color: `rgba(${accent},0.9)`,
     ...mono, fontSize: '10px', fontWeight: 'bold',
     display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
     cursor: 'pointer', userSelect: 'none', WebkitUserSelect: 'none' as const, touchAction: 'none' as const,
@@ -212,49 +245,93 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
 
   const smallBtn = (action: string, accent = '255,255,255'): React.CSSProperties => ({
     width: SMALL, height: SMALL, borderRadius: '50%',
-    background: activeButtons.has(action) ? `rgba(${accent},0.35)` : `rgba(${accent},0.06)`,
-    border: `1px solid rgba(${accent},0.22)`,
-    color: `rgba(${accent},0.75)`,
+    background: activeButtons.has(action) ? `rgba(${accent},0.35)` : `rgba(${accent},0.03)`,
+    border: `1px solid rgba(${accent},0.18)`,
+    color: `rgba(${accent},0.7)`,
     ...mono, fontSize: '8px', fontWeight: 'bold', lineHeight: 1.2,
     display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
     cursor: 'pointer', userSelect: 'none', WebkitUserSelect: 'none' as const, touchAction: 'none' as const,
     flexShrink: 0,
   })
 
+  // ── Portrait vs landscape positioning ─────────────────────────────────────
+  const joystickZoneStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', left: 0, top: PORTRAIT_TOP, bottom: 0, width: '50vw', zIndex: 20, touchAction: 'none' }
+    : { position: 'fixed', left: 0, top: 0, width: '45vw', height: '100dvh', zIndex: 20, touchAction: 'none' }
+
+  const buttonPadStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', right: 12, bottom: 12, top: PORTRAIT_TOP, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-end', gap: 10, zIndex: 20, touchAction: 'none' }
+    : { position: 'fixed', right: 16, bottom: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 20, touchAction: 'none' }
+
+  const helpBtnStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', top: `calc(${PORTRAIT_TOP} + 8px)`, right: 12, width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.18)', color: 'rgba(255,255,255,0.45)', ...mono, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'none', zIndex: 40 }
+    : { position: 'fixed', top: 12, right: 12, width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.18)', color: 'rgba(255,255,255,0.45)', ...mono, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'none', zIndex: 40 }
+
+  const fsBtnStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', top: `calc(${PORTRAIT_TOP} + 8px)`, right: 60, width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.18)', color: 'rgba(255,255,255,0.45)', ...mono, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'none', zIndex: 40 }
+    : { position: 'fixed', top: 12, right: 60, width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.18)', color: 'rgba(255,255,255,0.45)', ...mono, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'none', zIndex: 40 }
+
+  const ynContainerStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', bottom: 24, left: '25vw', transform: 'translateX(-50%)', display: 'flex', gap: 16, zIndex: 30 }
+    : { position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 16, zIndex: 30 }
+
+  const restartBtnStyle: React.CSSProperties = isPortrait
+    ? { position: 'fixed', bottom: '30%', left: '25vw', transform: 'translateX(-50%)', width: 200, height: 56, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 17, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 35, boxShadow: '0 0 20px rgba(255,80,80,0.4)', cursor: 'pointer', touchAction: 'none' }
+    : { position: 'fixed', bottom: '16vh', left: '50%', transform: 'translateX(-50%)', width: 220, height: 60, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 18, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 35, boxShadow: '0 0 24px rgba(255,80,80,0.45)', cursor: 'pointer', touchAction: 'none' }
+
   return (
     <>
-      {/* Mutator card tap overlay — transparent, full screen, only when draft active */}
+      {/* Mutator card tap overlay — zIndex 25 so it's above the joystick zone (20) */}
       {mutatorActive && (
         <div
-          style={{ position: 'fixed', inset: 0, zIndex: 10, touchAction: 'none' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 25, touchAction: 'none' }}
           onTouchStart={handleCanvasTap}
         />
       )}
 
-      {/* ── Joystick zone (left 45%) ───────────────────────────────────────── */}
+      {/* ── Joystick zone ────────────────────────────────────────────────── */}
       <div
-        style={{ position: 'fixed', left: 0, top: 0, width: '45vw', height: '100dvh', zIndex: 20, touchAction: 'none' }}
+        style={joystickZoneStyle}
         onTouchStart={handleJoystickStart}
         onTouchMove={handleJoystickMove}
         onTouchEnd={handleJoystickEnd}
         onTouchCancel={handleJoystickEnd}
       >
-        {joystickOrigin ? (
-          <div style={{ position: 'absolute', left: joystickOrigin.x, top: joystickOrigin.y, transform: 'translate(-50%, -50%)', pointerEvents: 'none' }}>
-            {/* Ring */}
-            <div style={{ width: 90, height: 90, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '2px solid rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {/* Thumb */}
-              <div style={{
-                width: 34, height: 34, borderRadius: '50%',
-                background: 'rgba(255,255,255,0.55)',
-                boxShadow: '0 0 8px rgba(255,255,255,0.3)',
-                position: 'absolute',
-                transform: `translate(${thumbOffset.x * 0.54}px, ${thumbOffset.y * 0.54}px)`,
-              }} />
-            </div>
-          </div>
-        ) : (
-          <div style={{ position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,0.12)', ...mono, fontSize: 11, pointerEvents: 'none', textAlign: 'center' }}>
+        {/* Ring + thumb — always rendered, shown/hidden via display */}
+        <div
+          ref={joystickRingRef}
+          style={{
+            position: 'absolute',
+            display: joystickVisible ? 'flex' : 'none',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transform: 'translate(-50%, -50%)',
+            width: 90, height: 90, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.04)',
+            border: '2px solid rgba(255,255,255,0.2)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            ref={thumbRef}
+            style={{
+              width: 34, height: 34, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.55)',
+              boxShadow: '0 0 8px rgba(255,255,255,0.3)',
+              position: 'absolute',
+              transform: 'translate(0px,0px)',
+            }}
+          />
+        </div>
+
+        {/* Hint text when joystick not active */}
+        {!joystickVisible && (
+          <div style={{
+            position: 'absolute',
+            bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            color: 'rgba(255,255,255,0.1)', ...mono, fontSize: 11,
+            pointerEvents: 'none', textAlign: 'center',
+          }}>
             ✦ MOVE
           </div>
         )}
@@ -262,7 +339,7 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
 
       {/* ── Y/N contextual buttons ─────────────────────────────────────────── */}
       {waveEventPending && (
-        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 16, zIndex: 30 }}>
+        <div style={ynContainerStyle}>
           <div
             style={{ padding: '12px 36px', borderRadius: 24, background: 'rgba(80,200,80,0.2)', border: '2px solid rgba(80,200,80,0.65)', color: '#66ff88', ...mono, fontSize: 20, fontWeight: 'bold', cursor: 'pointer', touchAction: 'none', letterSpacing: '0.1em' }}
             {...makeHandlers('accept')}
@@ -276,17 +353,13 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
 
       {/* ── Game Over Restart button ───────────────────────────────────────── */}
       {gameOver && (
-        <div
-          style={{ position: 'fixed', bottom: '16vh', left: '50%', transform: 'translateX(-50%)', width: 220, height: 60, borderRadius: 8, background: 'rgba(255,80,80,0.82)', border: '2px solid rgba(255,120,120,0.9)', color: '#fff', ...mono, fontSize: 18, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.2em', zIndex: 30, boxShadow: '0 0 24px rgba(255,80,80,0.45)', cursor: 'pointer', touchAction: 'none' }}
-          onTouchStart={handleRestart}
-        >
+        <div style={restartBtnStyle} onTouchStart={handleRestart}>
           RESTART
         </div>
       )}
 
       {/* ── Right-side control pad ─────────────────────────────────────────── */}
-      <div style={{ position: 'fixed', right: 16, bottom: 16, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 20, touchAction: 'none' }}>
-
+      <div style={buttonPadStyle}>
         {/* Rare row — Time Flicker + Consumable */}
         <div style={{ display: 'flex', gap: 8 }}>
           <div style={smallBtn('flicker', '0,200,255')} {...makeHandlers('flicker')}>
@@ -301,12 +374,12 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <div style={btnBase('pulse', '170,68,255')} {...makeHandlers('pulse')}>PULSE</div>
           <div style={btnBase('dash',  '0,200,255')}  {...makeHandlers('dash')}>DASH</div>
-          <div style={btnBase('light', '200,136,255', { width: 'clamp(56px,14vmin,80px)', height: 'clamp(56px,14vmin,80px)' })} {...makeHandlers('light')}>LIGHT</div>
+          <div style={btnBase('light', '200,136,255')} {...makeHandlers('light')}>LIGHT</div>
           <div
             style={btnBase('heavy', '255,170,34', {
               background: heavyCharging
-                ? 'rgba(255,170,34,0.55)'
-                : activeButtons.has('heavy') ? 'rgba(255,170,34,0.35)' : 'rgba(255,170,34,0.1)',
+                ? 'rgba(255,170,34,0.5)'
+                : activeButtons.has('heavy') ? 'rgba(255,170,34,0.35)' : 'rgba(255,170,34,0.07)',
             })}
             {...makeHandlers('heavy')}
           >
@@ -317,15 +390,20 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
         </div>
       </div>
 
+      {/* ── Fullscreen button ─────────────────────────────────────────────── */}
+      <div style={fsBtnStyle} onTouchStart={toggleFullscreen}>
+        {isFullscreen ? '⊡' : '⛶'}
+      </div>
+
       {/* ── ? Help button ──────────────────────────────────────────────────── */}
       <div
-        style={{ position: 'fixed', top: 12, right: 12, width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', ...mono, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'none', zIndex: 40 }}
+        style={helpBtnStyle}
         onTouchStart={(e) => { e.preventDefault(); setShowGuide(true) }}
       >?</div>
 
       {/* ── Controls Guide Overlay ─────────────────────────────────────────── */}
       {showGuide && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(8,8,20,0.96)', zIndex: 50, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, padding: 24, touchAction: 'none' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(8,8,20,0.97)', zIndex: 50, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, padding: 24, touchAction: 'none' }}>
           <p style={{ ...mono, color: '#7b2fff', fontSize: 16, letterSpacing: '0.2em', fontWeight: 'bold', margin: 0, textShadow: '0 0 20px #7b2fff88' }}>CONTROLS</p>
 
           <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -343,12 +421,12 @@ export default function MobileControls({ inputRef, gameStateRef, canvasRef, rest
             {/* Button legend */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
               {([
-                { label: 'LIGHT',     desc: 'Light Attack',                   color: '#cc88ff' },
-                { label: 'HEAVY',     desc: 'Tap → charge  ·  Tap again → fire', color: '#ffaa22' },
-                { label: 'PULSE',     desc: 'AoE Energy Burst',               color: '#aa44ff' },
-                { label: 'DASH',      desc: 'Quick Dodge',                    color: '#00ccff' },
-                { label: 'TIME FLIK', desc: 'Slow all enemies',               color: '#00ccff' },
-                { label: 'ITEM',      desc: 'Use Consumable',                 color: '#aaffaa' },
+                { label: 'LIGHT',     desc: 'Light Attack',                       color: '#cc88ff' },
+                { label: 'HEAVY',     desc: 'Tap → charge  ·  Tap again → fire',  color: '#ffaa22' },
+                { label: 'PULSE',     desc: 'AoE Energy Burst',                   color: '#aa44ff' },
+                { label: 'DASH',      desc: 'Quick Dodge',                        color: '#00ccff' },
+                { label: 'TIME FLIK', desc: 'Slow all enemies',                   color: '#00ccff' },
+                { label: 'ITEM',      desc: 'Use Consumable',                     color: '#aaffaa' },
               ] as const).map(({ label, desc, color }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ ...mono, fontSize: 9, color, background: color + '22', border: `1px solid ${color}55`, borderRadius: 4, padding: '2px 6px', minWidth: 60, textAlign: 'center' }}>{label}</span>
