@@ -4,8 +4,9 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { GameState, createGameState, updateGame, renderGame, resetGame } from '@/lib/game/engine'
 import { InputState } from '@/lib/game/player'
 import { audio } from '@/lib/game/audio'
-import { GAME_WIDTH, GAME_HEIGHT } from '@/lib/game/settings'
+import { GAME_WIDTH, GAME_HEIGHT, QUESTION_FEEDBACK_DURATION as QUIZ_FEEDBACK_MS, LETTER_FLASH_GRADES, DifficultyLevel } from '@/lib/game/settings'
 import { DailyEntry } from '@/lib/game/renderer'
+import { TOPICS } from '@/lib/game/questions'
 import { AssetCache, loadAssets } from '@/lib/game/assetLoader'
 import {
   submitDailyChallengeScore,
@@ -15,11 +16,25 @@ import {
   AllTimeEntry,
 } from '@/lib/supabase/daily-challenge'
 
+const HEBREW_RANGE = /[\u05d0-\u05ea]/
+
 export default function ShadowPulseGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameStateRef = useRef<GameState | null>(null)
   const assetsRef = useRef<AssetCache | null>(null)
   const [scale, setScale] = useState(1)
+  const [selectedGrade, setSelectedGrade] = useState<number>(() =>
+    parseInt(typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_grade') ?? '1' : '1', 10)
+  )
+  const [quizEnabled, setQuizEnabled] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_quiz_enabled') === 'true' : false
+  )
+  const [selectedTopicId, setSelectedTopicId] = useState<string>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_topic') ?? 'english-vocab' : 'english-vocab'
+  )
+  const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyLevel>(() =>
+    (typeof window !== 'undefined' ? localStorage.getItem('shadowpulse_difficulty') as DifficultyLevel : null) ?? 'normal'
+  )
 
   useEffect(() => {
     const update = () =>
@@ -59,11 +74,11 @@ export default function ShadowPulseGame() {
   const startGame = useCallback((isDailyChallenge = false) => {
     audio.init()
     audio.resume()
-    gameStateRef.current = createGameState(isDailyChallenge)
+    gameStateRef.current = createGameState(isDailyChallenge, selectedGrade, quizEnabled, selectedTopicId, selectedDifficulty)
     scoreSubmittedRef.current = false
     setDailyLeaderboard([])
     setStarted(true)
-  }, [])
+  }, [selectedGrade, quizEnabled, selectedTopicId, selectedDifficulty])
 
   // Input handling
   useEffect(() => {
@@ -72,11 +87,78 @@ export default function ShadowPulseGame() {
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault()
       audio.resume()
+
+      // Hebrew layout detection — must be checked BEFORE toLowerCase (Hebrew has no lowercase)
+      // Only active in Classroom Mode
+      if (HEBREW_RANGE.test(e.key)) {
+        const state = gameStateRef.current
+        if (state && state.quizEnabled && !state.hebrewLayoutActive) {
+          state.hebrewLayoutActive = true
+        }
+        return
+      }
+      // Auto-resume from Hebrew pause when English key detected
+      const hebrewState = gameStateRef.current
+      if (hebrewState?.quizEnabled && hebrewState.hebrewLayoutActive) {
+        hebrewState.hebrewLayoutActive = false
+        // don't return — process the English key normally
+      }
+
       const key = e.key.toLowerCase()
       const wasPressed = keysRef.current.has(key)
       keysRef.current.add(key)
 
       const input = inputRef.current
+
+      // A/B/C/D for vocabulary quiz phase
+      const quizState = gameStateRef.current
+      if (quizState?.questionPhase && quizState.questionResult === 'pending' && !wasPressed) {
+        const answerMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 }
+        if (key in answerMap) {
+          const chosen = answerMap[key]
+          if (chosen === quizState.currentQuestion?.correctIndex) {
+            quizState.questionResult = 'correct'
+            quizState.questionFeedbackTimer = 1000
+          } else if (quizState.questionRetryAvailable) {
+            quizState.questionResult = 'wrong-first'
+            quizState.questionRetryAvailable = false
+            quizState.questionFeedbackTimer = QUIZ_FEEDBACK_MS
+          } else {
+            quizState.questionResult = 'wrong-final'
+            quizState.questionFeedbackTimer = QUIZ_FEEDBACK_MS
+          }
+          return
+        }
+      }
+
+      // ESC — toggle pause (blocked during gameOver, mutator selection, quiz, wave events)
+      if (key === 'escape' && !wasPressed) {
+        const s = gameStateRef.current
+        if (s && !s.gameOver && !s.mutatorSelectionActive && !s.questionPhase && !s.pendingWaveEvent) {
+          s.paused = !s.paused
+          if (!s.paused) s.pauseMenuSelection = 0
+        }
+      }
+
+      // Pause menu navigation — block all other input while paused
+      if (gameStateRef.current?.paused) {
+        const s = gameStateRef.current
+        if ((key === 'arrowup' || key === 'w') && !wasPressed)
+          s.pauseMenuSelection = Math.max(0, s.pauseMenuSelection - 1)
+        if ((key === 'arrowdown' || key === 's') && !wasPressed)
+          s.pauseMenuSelection = Math.min(2, s.pauseMenuSelection + 1)
+
+        const confirmSel = (sel: number) => {
+          if (sel === 0) { s.paused = false; s.pauseMenuSelection = 0 }
+          else if (sel === 1) { gameStateRef.current = resetGame(s) }
+          else if (sel === 2) { setStarted(false) }
+        }
+        if (key === 'enter' && !wasPressed) confirmSel(s.pauseMenuSelection)
+        if (key === '1' && !wasPressed) confirmSel(0)
+        if (key === '2' && !wasPressed) confirmSel(1)
+        if (key === '3' && !wasPressed) confirmSel(2)
+        return
+      }
 
       // Movement
       input.up = keysRef.current.has('w') || keysRef.current.has('arrowup')
@@ -107,6 +189,29 @@ export default function ShadowPulseGame() {
       // Time flicker (on press)
       if (key === ';' && !wasPressed) {
         input.timeFlicker = true
+      }
+
+      // Letter flash (Grade 1–4) — triggered on any control key press
+      if (!wasPressed) {
+        const flashState = gameStateRef.current
+        const canvas = canvasRef.current
+        if (flashState && canvas && flashState.quizEnabled && LETTER_FLASH_GRADES.includes(flashState.selectedGrade)) {
+          const FLASH_COLORS: Record<string, string> = {
+            j: '#cc99ff', k: '#ffaa22', l: '#44ccff', ';': '#ffffff',
+            w: '#88ff88', a: '#88ff88', s: '#88ff88', d: '#88ff88',
+            ' ': '#ffdd44',
+          }
+          const flashKey = e.key === ' ' ? ' ' : key
+          if (flashKey in FLASH_COLORS) {
+            flashState.letterFlashes.push({
+              letter: flashKey === ' ' ? 'SPACE' : flashKey.toUpperCase(),
+              x: canvas.width / 2 + (Math.random() - 0.5) * 200,
+              y: canvas.height * 0.4,
+              age: 0,
+              color: FLASH_COLORS[flashKey],
+            })
+          }
+        }
       }
 
       // Mutator selection (1, 2, 3 keys)
@@ -252,6 +357,26 @@ export default function ShadowPulseGame() {
         onStart={() => startGame(false)}
         onStartDaily={() => startGame(true)}
         scale={scale}
+        selectedGrade={selectedGrade}
+        onGradeChange={(g) => {
+          setSelectedGrade(g)
+          localStorage.setItem('shadowpulse_grade', String(g))
+        }}
+        quizEnabled={quizEnabled}
+        onQuizToggle={(v) => {
+          setQuizEnabled(v)
+          localStorage.setItem('shadowpulse_quiz_enabled', String(v))
+        }}
+        selectedTopicId={selectedTopicId}
+        onTopicChange={(id) => {
+          setSelectedTopicId(id)
+          localStorage.setItem('shadowpulse_topic', id)
+        }}
+        selectedDifficulty={selectedDifficulty}
+        onDifficultyChange={(d) => {
+          setSelectedDifficulty(d)
+          localStorage.setItem('shadowpulse_difficulty', d)
+        }}
       />
     )
   }
@@ -269,12 +394,88 @@ export default function ShadowPulseGame() {
           border: '1px solid #1a1a2e',
         }}
         tabIndex={0}
+        onClick={(e) => {
+          const s = gameStateRef.current
+          if (!s?.paused) return
+          const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
+          const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+          const x = (e.clientX - rect.left) * (GAME_WIDTH / rect.width)
+          const y = (e.clientY - rect.top) * (GAME_HEIGHT / rect.height)
+          const startY = cy - 18
+          for (let i = 0; i < 3; i++) {
+            const iy = startY + i * 52
+            if (x >= cx - 140 && x <= cx + 140 && y >= iy - 18 && y <= iy + 18) {
+              if (i === 0) { s.paused = false; s.pauseMenuSelection = 0 }
+              else if (i === 1) { gameStateRef.current = resetGame(s) }
+              else if (i === 2) { setStarted(false) }
+              break
+            }
+          }
+        }}
+        onMouseMove={(e) => {
+          const s = gameStateRef.current
+          const canvas = e.target as HTMLCanvasElement
+          if (!s?.paused) { canvas.style.cursor = 'default'; return }
+          const rect = canvas.getBoundingClientRect()
+          const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2
+          const x = (e.clientX - rect.left) * (GAME_WIDTH / rect.width)
+          const y = (e.clientY - rect.top) * (GAME_HEIGHT / rect.height)
+          const startY = cy - 18
+          let hit = false
+          for (let i = 0; i < 3; i++) {
+            const iy = startY + i * 52
+            if (x >= cx - 140 && x <= cx + 140 && y >= iy - 18 && y <= iy + 18) {
+              s.pauseMenuSelection = i
+              hit = true
+              break
+            }
+          }
+          canvas.style.cursor = hit ? 'pointer' : 'default'
+        }}
       />
     </div>
   )
 }
 
-function TitleScreen({ onStart, onStartDaily, scale }: { onStart: () => void; onStartDaily: () => void; scale: number }) {
+const DIFFICULTY_COLORS: Record<DifficultyLevel, { border: string; bg: string; text: string }> = {
+  very_easy: { border: '#44ddff88', bg: 'rgba(68,221,255,0.15)', text: '#66ddff' },
+  easy:      { border: '#44ff8888', bg: 'rgba(68,255,136,0.15)', text: '#44ff88' },
+  normal:    { border: '#7b2fff88', bg: 'rgba(123,47,255,0.20)', text: '#ffffffdd' },
+  arcade:    { border: '#ff664488', bg: 'rgba(255,102,68,0.15)', text: '#ff8866' },
+}
+
+const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  very_easy: 'VERY EASY',
+  easy:      'EASY',
+  normal:    'NORMAL',
+  arcade:    'ARCADE',
+}
+
+function TitleScreen({
+  onStart,
+  onStartDaily,
+  scale,
+  selectedGrade,
+  onGradeChange,
+  quizEnabled,
+  onQuizToggle,
+  selectedTopicId,
+  onTopicChange,
+  selectedDifficulty,
+  onDifficultyChange,
+}: {
+  onStart: () => void
+  onStartDaily: () => void
+  scale: number
+  selectedGrade: number
+  onGradeChange: (g: number) => void
+  quizEnabled: boolean
+  onQuizToggle: (v: boolean) => void
+  selectedTopicId: string
+  onTopicChange: (id: string) => void
+  selectedDifficulty: DifficultyLevel
+  onDifficultyChange: (d: DifficultyLevel) => void
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef<number>(0)
   const [showNamePrompt, setShowNamePrompt] = useState(false)
@@ -418,6 +619,118 @@ function TitleScreen({ onStart, onStartDaily, scale }: { onStart: () => void; on
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Difficulty Selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ ...mono, color: quizEnabled ? '#ffffff1a' : '#ffffff44', fontSize: '11px', letterSpacing: '0.2em' }}>DIFFICULTY</span>
+          {(['very_easy', 'easy', 'normal', 'arcade'] as DifficultyLevel[]).map(d => {
+            const isActive = selectedDifficulty === d && !quizEnabled
+            const dc = DIFFICULTY_COLORS[d]
+            return (
+              <button
+                key={d}
+                onClick={() => !quizEnabled && onDifficultyChange(d)}
+                style={{
+                  ...mono,
+                  background: isActive ? dc.bg : 'transparent',
+                  border: isActive ? `1px solid ${dc.border}` : '1px solid #ffffff11',
+                  borderRadius: '5px',
+                  color: quizEnabled ? '#ffffff1a' : isActive ? dc.text : '#ffffff33',
+                  fontSize: '12px',
+                  padding: '3px 10px',
+                  cursor: quizEnabled ? 'default' : 'pointer',
+                  fontWeight: isActive ? 'bold' : 'normal',
+                  letterSpacing: '0.08em',
+                  boxShadow: isActive ? `0 0 8px ${dc.border}` : 'none',
+                }}
+              >
+                {DIFFICULTY_LABELS[d]}
+              </button>
+            )
+          })}
+          {quizEnabled && (
+            <span style={{ ...mono, color: '#7b2fff66', fontSize: '10px', letterSpacing: '0.1em' }}>learning mode</span>
+          )}
+        </div>
+
+        {/* Classroom Mode */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '7px', marginTop: '2px' }}>
+          {/* Toggle row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ ...mono, color: '#ffffff44', fontSize: '11px', letterSpacing: '0.2em' }}>🎓 CLASSROOM MODE</span>
+            <button
+              onClick={() => onQuizToggle(!quizEnabled)}
+              style={{
+                ...mono,
+                background: quizEnabled ? 'rgba(123,47,255,0.35)' : 'transparent',
+                border: quizEnabled ? '1px solid #7b2fffcc' : '1px solid #ffffff22',
+                borderRadius: '5px',
+                color: quizEnabled ? '#ffffffdd' : '#ffffff44',
+                fontSize: '12px',
+                padding: '3px 14px',
+                cursor: 'pointer',
+                fontWeight: quizEnabled ? 'bold' : 'normal',
+                boxShadow: quizEnabled ? '0 0 8px #7b2fff66' : 'none',
+                letterSpacing: '0.1em',
+              }}
+            >
+              {quizEnabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          {/* Grade + Topic — only when classroom mode ON */}
+          {quizEnabled && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+              {/* Grade buttons */}
+              <div dir="rtl" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ ...mono, color: '#ffffff88', fontSize: '12px' }}>כיתה:</span>
+                {[1, 2, 3, 4, 5, 6].map(g => (
+                  <button
+                    key={g}
+                    onClick={() => onGradeChange(g)}
+                    style={{
+                      ...mono,
+                      background: selectedGrade === g ? 'rgba(123, 47, 255, 0.35)' : 'transparent',
+                      border: selectedGrade === g ? '1px solid #7b2fffcc' : '1px solid #ffffff22',
+                      borderRadius: '5px',
+                      color: selectedGrade === g ? '#ffffffdd' : '#ffffff55',
+                      fontSize: '12px',
+                      padding: '3px 9px',
+                      cursor: 'pointer',
+                      fontWeight: selectedGrade === g ? 'bold' : 'normal',
+                      boxShadow: selectedGrade === g ? '0 0 8px #7b2fff66' : 'none',
+                    }}
+                  >
+                    {g === 6 ? '6+' : String(g)}
+                  </button>
+                ))}
+              </div>
+              {/* Topic dropdown */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ ...mono, color: '#ffffff44', fontSize: '11px', letterSpacing: '0.1em' }}>TOPIC</span>
+                <select
+                  value={selectedTopicId}
+                  onChange={e => onTopicChange(e.target.value)}
+                  style={{
+                    ...mono,
+                    background: '#0d0d1a',
+                    border: '1px solid #7b2fff55',
+                    borderRadius: '5px',
+                    color: '#ffffffcc',
+                    fontSize: '12px',
+                    padding: '4px 10px',
+                    cursor: 'pointer',
+                    outline: 'none',
+                  }}
+                >
+                  {TOPICS.map(t => (
+                    <option key={t.id} value={t.id}>{t.displayName}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Buttons */}

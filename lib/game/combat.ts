@@ -130,6 +130,23 @@ export function processPlayerAttacks(player: Player, enemies: Enemy[], modifiers
     // Fast enemies might dodge
     if (player.attacking === 'light' && tryDodge(enemy)) continue
 
+    // Shielder blocks frontal light/heavy attacks
+    if (enemy.type === 'shielder' && (player.attacking === 'light' || player.attacking === 'heavy') && enemy.hp / enemy.maxHp > 0.5) {
+      const toPlayer = Math.atan2(player.pos.y - enemy.pos.y, player.pos.x - enemy.pos.x)
+      const diff = angleDiff(enemy.shieldFacing, toPlayer)
+      if (diff < Math.PI / 3) {
+        // Blocked — show a zero-damage number with shielder color
+        result.hitEffects.push({
+          pos: { x: (player.pos.x + enemy.pos.x) / 2, y: (player.pos.y + enemy.pos.y) / 2 },
+          type: hitType,
+          time: 0.2,
+        })
+        result.damageHits.push({ damage: 0, pos: { x: enemy.pos.x, y: enemy.pos.y - enemy.size - 10 }, hitType: hitType === 'pulse' ? 'pulse' : hitType })
+        hitSomething = true
+        continue
+      }
+    }
+
     const knockDir = normalize(sub(enemy.pos, player.pos))
     const killed = damageEnemy(enemy, attackDamage, knockDir, attackKnockback)
 
@@ -275,6 +292,7 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
     switch (enemy.type) {
       case 'normal':
       case 'fast':
+      case 'shielder':
         if (dist < enemy.attackRange + S.PLAYER_SIZE) {
           const prevDamaged = result.playerDamaged
           applyPlayerDamage(
@@ -330,6 +348,47 @@ export function processEnemyAttacks(player: Player, enemies: Enemy[], canTrigger
             result,
             { intensity: 15, duration: 0.25 },
             scale(knockDir, 400)
+          )
+          if (!prevDamaged && result.playerDamaged) {
+            result.damageDir = knockDir
+          }
+        }
+        break
+
+      case 'spawner':
+        // Spawner never directly attacks the player
+        break
+
+      case 'boss':
+        // Melee hit when charge connects
+        if (!enemy.shockwaveActive && dist < enemy.attackRange + S.PLAYER_SIZE) {
+          const knockDir = normalize(sub(player.pos, enemy.pos))
+          const prevDamaged = result.playerDamaged
+          applyPlayerDamage(
+            player,
+            enemy.damage,
+            enemy.type,
+            canTriggerLastStand && !result.lastStandTriggered,
+            result,
+            { intensity: 18, duration: 0.3 },
+            scale(knockDir, 500)
+          )
+          if (!prevDamaged && result.playerDamaged) {
+            result.damageDir = knockDir
+          }
+        }
+        // Ring pulse (shockwave field)
+        if (enemy.shockwaveActive && dist < enemy.shockwaveRange + S.PLAYER_SIZE) {
+          const knockDir = normalize(sub(player.pos, enemy.pos))
+          const prevDamaged = result.playerDamaged
+          applyPlayerDamage(
+            player,
+            Math.round(enemy.damage * 0.7),
+            enemy.type,
+            canTriggerLastStand && !result.lastStandTriggered,
+            result,
+            { intensity: 20, duration: 0.3 },
+            scale(knockDir, 350)
           )
           if (!prevDamaged && result.playerDamaged) {
             result.damageDir = knockDir

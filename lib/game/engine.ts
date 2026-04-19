@@ -1,5 +1,6 @@
 import { Player, createPlayer, updatePlayer, InputState, AttackType } from './player'
-import { Enemy, EnemyType, updateEnemy } from './enemy'
+import { Question, getQuestion } from './questions'
+import { Enemy, EnemyType, updateEnemy, createEnemy } from './enemy'
 import { distance, normalize, sub, scale, add } from './vec2'
 import { Camera, createCamera, shakeCamera, updateCamera } from './camera'
 import { ParticleSystem, createParticleSystem, updateParticles, emitHitSparks, emitPulseWave, emitDeathExplosion, emitTypedDeathExplosion, emitAffixDeathEffect, emitAmbientParticle } from './particles'
@@ -9,8 +10,8 @@ import { render, DailyEntry } from './renderer'
 import { AssetCache } from './assetLoader'
 import { LevelTheme, Obstacle, Hazard, getLevelTheme, getLevelNumber, isLevelTransition, generateObstacles, generateHazards } from './levels'
 import * as S from './settings'
-import { setArenaRadius } from './settings'
-import { Mutator, MutatorModifiers, getRandomMutators, computeCombinedModifiers } from './mutators'
+import { setArenaRadius, DifficultyLevel, DIFFICULTY_PRESETS, DifficultyPreset } from './settings'
+import { Mutator, MutatorModifiers, getRandomMutators, getEpicMutators, computeCombinedModifiers } from './mutators'
 import {
   ContractState,
   ConsumableType,
@@ -39,6 +40,14 @@ export interface DamageNumber {
   age: number
   lifetime: number
   color: string
+}
+
+export interface LetterFlash {
+  letter: string     // e.g. "J"
+  x: number         // screen position
+  y: number
+  age: number       // seconds elapsed
+  color: string     // matches key/attack type color
 }
 
 export interface GameState {
@@ -103,9 +112,48 @@ export interface GameState {
   // Consumables
   consumables: ConsumableType[]
   consumableActive: { type: ConsumableType; timer: number } | null
+  // ── Difficulty system ─────────────────────────────────────────────────────
+  difficulty: DifficultyLevel  // 'easy' | 'normal' | 'arcade'
+  difficultyHpBonus: number    // flat HP added to PLAYER_HP from the active preset
+  // ── Educational layer ────────────────────────────────────────────────────
+  quizEnabled: boolean         // Classroom Mode on/off — all educational features gate on this
+  selectedGrade: number
+  selectedTopicId: string      // active topic for quiz questions (e.g. 'english-vocab')
+  // Hebrew layout detection
+  hebrewLayoutActive: boolean
+  // Keyboard teaching panel
+  keyboardPanelTimer: number   // counts up during active gameplay (seconds)
+  letterFlashes: LetterFlash[]
+  // Post-wave vocabulary quiz (Grade 3+)
+  questionPhase: boolean
+  currentQuestion: Question | null
+  questionResult: 'pending' | 'correct' | 'wrong-first' | 'wrong-final'
+  questionRetryAvailable: boolean
+  questionFeedbackTimer: number  // counts DOWN in ms
+  pendingMutatorIndex: number    // which mutator was selected (0-indexed)
+  // ── Pause menu ───────────────────────────────────────────────────────────────
+  paused: boolean
+  pauseMenuSelection: number     // 0=Resume, 1=Restart, 2=Return to Title
+  // ── Run stats ────────────────────────────────────────────────────────────────
+  totalKills: number
+  totalDamageDealt: number
+  contractsCompleted: number
+  // ── Boss system ──────────────────────────────────────────────────────────────
+  bossWaveCompleted: boolean     // next mutator draft forces 3 epics
 }
 
-export function createGameState(isDailyChallenge = false): GameState {
+/** Returns the active DifficultyPreset, respecting Classroom (grade-split) and Daily overrides. */
+export function getEffectivePreset(state: GameState): DifficultyPreset {
+  if (state.isDailyChallenge) return DIFFICULTY_PRESETS['normal']
+  if (state.quizEnabled) {
+    // Grades 1-2: Very Easy — kids lack keyboard coordination, focus is on just playing
+    // Grades 3-6: Classroom — gentle but quiz-gated mutators require vocabulary
+    return state.selectedGrade <= 2 ? DIFFICULTY_PRESETS['very_easy'] : DIFFICULTY_PRESETS['classroom']
+  }
+  return DIFFICULTY_PRESETS[state.difficulty]
+}
+
+export function createGameState(isDailyChallenge = false, selectedGrade = 1, quizEnabled = false, selectedTopicId = 'english-vocab', difficulty: DifficultyLevel = 'normal'): GameState {
   const challengeDate = new Date().toISOString().slice(0, 10)
   if (isDailyChallenge) {
     setRng(createSeededRng(getDailySeed(challengeDate)))
@@ -113,9 +161,20 @@ export function createGameState(isDailyChallenge = false): GameState {
     resetToMathRandom()
   }
 
+  // Resolve effective preset (Daily locked to normal; Classroom splits by grade)
+  const effectiveDifficulty: DifficultyLevel | 'classroom' =
+    isDailyChallenge ? 'normal'
+    : quizEnabled ? (selectedGrade <= 2 ? 'very_easy' : 'classroom')
+    : difficulty
+  const preset = DIFFICULTY_PRESETS[effectiveDifficulty]
+  const difficultyHpBonus = preset.playerHpBonus
+
   const startTheme = getLevelTheme(1)
+  const basePlayer = createPlayer()
+  basePlayer.hp = S.PLAYER_HP + difficultyHpBonus
+  basePlayer.maxHp = S.PLAYER_HP + difficultyHpBonus
   return {
-    player: createPlayer(),
+    player: basePlayer,
     enemies: [],
     camera: createCamera(),
     particles: createParticleSystem(),
@@ -147,13 +206,13 @@ export function createGameState(isDailyChallenge = false): GameState {
     mutatorSelectionInput: null,
     // Contract system
     contractState: createContractState(),
-    originalEnemyCounts: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
+    originalEnemyCounts: { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 },
     // Last Stand system
     lastStandUsed: false,
     lastStandActive: false,
     lastStandTimer: 0,
     // Death recap
-    damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0 },
+    damageByEnemyType: { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 },
     // Damage feedback
     damageFlashTimer: 0,
     damageDir: { x: 0, y: 0 },
@@ -173,13 +232,71 @@ export function createGameState(isDailyChallenge = false): GameState {
     // Consumables
     consumables: [],
     consumableActive: null,
+    // Difficulty system
+    difficulty: isDailyChallenge ? 'normal' : difficulty,
+    difficultyHpBonus,
+    // Educational layer
+    quizEnabled,
+    selectedGrade,
+    selectedTopicId,
+    hebrewLayoutActive: false,
+    keyboardPanelTimer: 0,
+    letterFlashes: [],
+    questionPhase: false,
+    currentQuestion: null,
+    questionResult: 'pending',
+    questionRetryAvailable: true,
+    questionFeedbackTimer: 0,
+    pendingMutatorIndex: 0,
+    paused: false,
+    pauseMenuSelection: 0,
+    // Run stats
+    totalKills: 0,
+    totalDamageDealt: 0,
+    contractsCompleted: 0,
+    // Boss
+    bossWaveCompleted: false,
   }
 }
 
-// Apply mutator stat changes to player
-function applyMutatorStats(player: Player, mods: MutatorModifiers): void {
-  // Recalculate max HP
-  const baseMaxHp = S.PLAYER_HP
+// ── Educational helpers ───────────────────────────────────────────────────────
+
+/** Apply the chosen mutator from state.pendingMutatorIndex to state. */
+function applyPendingMutator(state: GameState): void {
+  const choiceIndex = state.pendingMutatorIndex
+  if (choiceIndex < 0 || choiceIndex >= state.mutatorChoices.length) return
+  const chosen = state.mutatorChoices[choiceIndex]
+  const priorCount = state.activeMutators.filter(m => m.id === chosen.id).length
+  let feedbackDesc = chosen.description
+  if (priorCount > 0 && chosen.stackEffects) {
+    const stackEffect = chosen.stackEffects[priorCount - 1]
+    if (stackEffect) {
+      feedbackDesc = stackEffect.description
+      const stackMutator = { ...chosen, modifiers: stackEffect.modifierDelta as MutatorModifiers }
+      state.activeMutators.push(stackMutator)
+    } else {
+      state.activeMutators.push(chosen)
+    }
+  } else {
+    state.activeMutators.push(chosen)
+  }
+  state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
+  applyMutatorStats(state.player, state.combinedModifiers, state.difficultyHpBonus)
+  const activeIdsAfter = new Set(state.activeMutators.map(m => m.id))
+  const synergyHit = (chosen.synergizes ?? []).filter(id => activeIdsAfter.has(id))
+  const synergyText = synergyHit.length > 0
+    ? ` ⚡ ${synergyHit.map(id => state.activeMutators.find(m => m.id === id)?.name ?? id).join(' + ')}`
+    : ''
+  state.mutatorFeedback = { name: chosen.name, description: feedbackDesc + synergyText, color: chosen.color, timer: 2.5 }
+  state.playerRarityGlowTimer = 2.0
+  state.playerRarityGlowColor = chosen.color
+  audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
+}
+
+// Apply mutator stat changes to player (difficultyHpBonus preserves difficulty HP offset)
+function applyMutatorStats(player: Player, mods: MutatorModifiers, difficultyHpBonus = 0): void {
+  // Recalculate max HP (base + difficulty bonus + mutator bonus)
+  const baseMaxHp = S.PLAYER_HP + difficultyHpBonus
   player.maxHp = baseMaxHp + (mods.maxHpBonus ?? 0)
   player.hp = Math.min(player.hp, player.maxHp)
 
@@ -196,6 +313,43 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     return
   }
 
+  // ESC pause — game fully frozen, menu handled by component key handler
+  if (state.paused) {
+    return
+  }
+
+  // Hebrew layout detected — game fully paused, waiting for layout switch
+  if (state.hebrewLayoutActive) {
+    return
+  }
+
+  // Question phase — game paused while student answers vocabulary quiz
+  if (state.questionPhase) {
+    if (state.questionFeedbackTimer > 0) {
+      state.questionFeedbackTimer -= dt * 1000
+      if (state.questionFeedbackTimer <= 0) {
+        state.questionFeedbackTimer = 0
+        // Timer expired: apply mutator (correct / wrong-first retry) or skip (wrong-final)
+        if (state.questionResult === 'correct') {
+          applyPendingMutator(state)
+        } else if (state.questionResult === 'wrong-first') {
+          // Allow retry — reset to pending
+          state.questionResult = 'pending'
+        } else if (state.questionResult === 'wrong-final') {
+          // No mutator awarded
+        }
+        if (state.questionResult !== 'pending') {
+          // Close quiz
+          state.questionPhase = false
+          state.currentQuestion = null
+          state.mutatorChoices = []
+          state.mutatorSelectionInput = null
+        }
+      }
+    }
+    return // Game paused during quiz
+  }
+
   // Mutator selection pauses the game
   if (state.mutatorSelectionActive) {
     state.mutatorSelectionTimer += dt
@@ -203,41 +357,26 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     if (state.mutatorSelectionInput !== null) {
       const choiceIndex = state.mutatorSelectionInput - 1
       if (choiceIndex >= 0 && choiceIndex < state.mutatorChoices.length) {
-        const chosen = state.mutatorChoices[choiceIndex]
-        // Determine stack level (0-indexed count of prior picks of this mutator)
-        const priorCount = state.activeMutators.filter(m => m.id === chosen.id).length
-        let feedbackDesc = chosen.description
-        if (priorCount > 0 && chosen.stackEffects) {
-          // Re-pick: apply the stack effect at this level
-          const stackEffect = chosen.stackEffects[priorCount - 1]
-          if (stackEffect) {
-            feedbackDesc = stackEffect.description
-            // Create a virtual mutator with just the delta modifiers for this stack
-            const stackMutator = { ...chosen, modifiers: stackEffect.modifierDelta as MutatorModifiers }
-            state.activeMutators.push(stackMutator)
-          } else {
-            state.activeMutators.push(chosen)
-          }
+        state.pendingMutatorIndex = choiceIndex
+        state.mutatorSelectionActive = false
+        state.mutatorPeekActive = false
+
+        if (state.quizEnabled && S.QUIZ_GRADES.includes(state.selectedGrade)) {
+          // Classroom Mode ON + Grade 3+ — gate mutator behind vocabulary quiz
+          state.questionPhase = true
+          state.currentQuestion = getQuestion(state.selectedGrade, state.wave, state.selectedTopicId)
+          state.questionResult = 'pending'
+          state.questionRetryAvailable = true
+          state.questionFeedbackTimer = 0
         } else {
-          state.activeMutators.push(chosen)
+          // Grade 1–2 — apply mutator immediately, no quiz
+          applyPendingMutator(state)
+          state.mutatorChoices = []
+          state.mutatorSelectionInput = null
         }
-        state.combinedModifiers = computeCombinedModifiers(state.activeMutators)
-        applyMutatorStats(state.player, state.combinedModifiers)
-        // Check if a synergy is now active
-        const activeIdsAfter = new Set(state.activeMutators.map(m => m.id))
-        const synergyHit = (chosen.synergizes ?? []).filter(id => activeIdsAfter.has(id))
-        const synergyText = synergyHit.length > 0
-          ? ` ⚡ ${synergyHit.map(id => state.activeMutators.find(m => m.id === id)?.name ?? id).join(' + ')}`
-          : ''
-        state.mutatorFeedback = { name: chosen.name, description: feedbackDesc + synergyText, color: chosen.color, timer: 2.5 }
-        state.playerRarityGlowTimer = 2.0
-        state.playerRarityGlowColor = chosen.color
-        audio.playMutatorSelect(chosen.rarity as 'common' | 'rare' | 'epic')
+      } else {
+        state.mutatorSelectionInput = null
       }
-      state.mutatorSelectionActive = false
-      state.mutatorChoices = []
-      state.mutatorSelectionInput = null
-      state.mutatorPeekActive = false
     }
     return // Game paused during selection
   }
@@ -267,6 +406,17 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
   if (state.mutatorFeedback) {
     state.mutatorFeedback.timer -= dt
     if (state.mutatorFeedback.timer <= 0) state.mutatorFeedback = null
+  }
+
+  // Keyboard panel timer (counts up during active gameplay, in seconds)
+  state.keyboardPanelTimer += dt
+
+  // Age out letter flashes
+  for (let i = state.letterFlashes.length - 1; i >= 0; i--) {
+    state.letterFlashes[i].age += dt
+    if (state.letterFlashes[i].age >= S.LETTER_FLASH_LIFETIME) {
+      state.letterFlashes.splice(i, 1)
+    }
   }
 
   // Last Stand slow-mo timer
@@ -406,6 +556,36 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     updateEnemy(enemy, state.player, dt, state.timeScale)
   }
 
+  // Handle spawner/boss pendingSpawn — create new Normal enemies
+  {
+    const diffPreset = getEffectivePreset(state)
+    const presetMults = { hp: diffPreset.enemyHpMult, speed: diffPreset.enemySpeedMult, damage: diffPreset.enemyDamageMult }
+    const difficultyMult = state.levelTheme.difficultyMult
+    const newEnemies: Enemy[] = []
+    for (const enemy of state.enemies) {
+      if (!enemy.pendingSpawn) continue
+      enemy.pendingSpawn = false
+      if (enemy.type === 'spawner') {
+        const count = Math.floor(rng() * 2) + 1
+        for (let i = 0; i < count; i++) {
+          const ang = rng() * Math.PI * 2
+          const d = 30 + rng() * 20
+          newEnemies.push(createEnemy('normal', enemy.pos.x + Math.cos(ang) * d, enemy.pos.y + Math.sin(ang) * d, difficultyMult, state.currentAffix, presetMults))
+        }
+      } else if (enemy.type === 'boss') {
+        // Phase 3 minion spawn
+        for (let i = 0; i < 3; i++) {
+          const ang = rng() * Math.PI * 2
+          const d = enemy.size + 30 + rng() * 30
+          newEnemies.push(createEnemy('normal', enemy.pos.x + Math.cos(ang) * d, enemy.pos.y + Math.sin(ang) * d, difficultyMult, state.currentAffix, presetMults))
+        }
+        emitHitSparks(state.particles, enemy.pos, S.ENEMY_COLORS.boss, 20)
+        shakeCamera(state.camera, 14, 0.35)
+      }
+    }
+    state.enemies = state.enemies.concat(newEnemies)
+  }
+
   // Enemy-obstacle collision (push enemies out of pillars)
   for (const enemy of state.enemies) {
     if (!enemy.isAlive) continue
@@ -444,6 +624,9 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     emitHitSparks(state.particles, effect.pos, effect.type === 'pulse' ? '#7b2fff' : '#ffffff', effect.type === 'heavy' ? 15 : 8)
   }
   state.score += playerCombat.enemiesKilled * 50
+  // Run stats tracking
+  state.totalKills += playerCombat.enemiesKilled
+  state.totalDamageDealt += playerCombat.damageHits.reduce((s, h) => s + h.damage, 0)
 
   // Spawn floating damage numbers
   for (const hit of playerCombat.damageHits) {
@@ -599,6 +782,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
 
   // Arena hazards update
   if (state.hazards.length > 0 && state.player.isAlive && state.waveActive) {
+    const hazardMult = getEffectivePreset(state).hazardDamageMult
     for (const hz of state.hazards) {
       const wasActive = hz.active
       hz.timer -= dt
@@ -611,7 +795,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         // Damage player if inside zone
         const d = distance(state.player.pos, hz.pos)
         if (d < hz.radius + S.PLAYER_SIZE && state.player.iframes <= 0 && !state.player.isDashing) {
-          state.player.hp -= S.HAZARD_ZONE_DAMAGE * dt
+          state.player.hp -= S.HAZARD_ZONE_DAMAGE * hazardMult * dt
           if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
           state.damageFlashTimer = Math.max(state.damageFlashTimer, 0.1)
           shakeCamera(state.camera, 4, 0.1)
@@ -629,7 +813,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
           while (diff > Math.PI) diff -= Math.PI * 2
           while (diff < -Math.PI) diff += Math.PI * 2
           if (Math.abs(diff) < Math.PI / 3 && state.player.iframes <= 0 && !state.player.isDashing) {
-            state.player.hp -= S.HAZARD_TRAP_DAMAGE
+            state.player.hp -= S.HAZARD_TRAP_DAMAGE * hazardMult
             state.player.iframes = S.PLAYER_IFRAMES * 0.8
             if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
             state.damageFlashTimer = S.DAMAGE_VIGNETTE_DURATION
@@ -646,7 +830,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
         // Pulse shockwave — damage player and enemies in radius
         const playerDist = distance(state.player.pos, hz.pos)
         if (playerDist < hz.radius && state.player.iframes <= 0 && !state.player.isDashing) {
-          state.player.hp -= S.HAZARD_PULSE_DAMAGE
+          state.player.hp -= S.HAZARD_PULSE_DAMAGE * hazardMult
           state.player.iframes = S.PLAYER_IFRAMES
           if (state.player.hp <= 0) { state.player.hp = 0; state.player.isAlive = false }
           state.damageFlashTimer = S.DAMAGE_VIGNETTE_DURATION
@@ -669,8 +853,8 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
     }
   }
 
-  // Arena shrink (starts at SHRINK_START_WAVE)
-  if (state.wave >= S.SHRINK_START_WAVE && state.waveActive) {
+  // Arena shrink (start wave controlled by difficulty preset)
+  if (state.wave >= getEffectivePreset(state).shrinkStartWave && state.waveActive) {
     const newRadius = Math.max(S.SHRINK_MIN_RADIUS, S.ARENA_RADIUS - S.SHRINK_RATE * dt)
     setArenaRadius(newRadius)
   }
@@ -772,10 +956,12 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.currentAffix = selectAffixForWave(state.wave)
 
       // Spawn enemies — double_enemies event spawns 1.5× count
+      const diffPreset = getEffectivePreset(state)
+      const presetMults = { hp: diffPreset.enemyHpMult, speed: diffPreset.enemySpeedMult, damage: diffPreset.enemyDamageMult }
       const isDoubleEnemies = state.activeWaveEvent?.effectType === 'double_enemies'
-      let enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix)
+      let enemies = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix, presetMults, diffPreset.waveCountMult)
       if (isDoubleEnemies) {
-        const extras = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix)
+        const extras = spawnWaveEnemies(state.wave, arenaRadius, S.ARENA_CENTER_X, S.ARENA_CENTER_Y, difficultyMult, state.currentAffix, presetMults, diffPreset.waveCountMult)
         // Add half the count of extras (50% more)
         enemies = enemies.concat(extras.slice(0, Math.ceil(extras.length * 0.5)))
       }
@@ -809,9 +995,11 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       audio.playWaveStart(state.wave)
 
       // Contract system - count enemies and select contract
-      state.originalEnemyCounts = { normal: 0, sniper: 0, heavy: 0, fast: 0 }
+      state.originalEnemyCounts = { normal: 0, sniper: 0, heavy: 0, fast: 0, shielder: 0, spawner: 0, boss: 0 }
       for (const e of state.enemies) {
-        state.originalEnemyCounts[e.type]++
+        if (e.type in state.originalEnemyCounts) {
+          state.originalEnemyCounts[e.type]++
+        }
       }
       const enemyTypes = [...new Set(state.enemies.map((e) => e.type))] as EnemyType[]
       state.contractState = {
@@ -826,6 +1014,12 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       state.waveActive = false
       state.waveTimer = S.WAVE_DELAY
       state.score += state.wave * 100
+      // Boss wave reward
+      if (state.wave % S.BOSS_WAVE_INTERVAL === 0) {
+        state.bossWaveCompleted = true
+        state.score += 500 // bonus score for defeating boss
+        shakeCamera(state.camera, 16, 0.5)
+      }
       audio.playWaveEnd()
 
       // Apply wave event score bonus if accepted
@@ -855,6 +1049,7 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
           if (contract.consumableReward) {
             state.consumables.push(contract.consumableReward)
           }
+          state.contractsCompleted++
         }
       }
 
@@ -865,7 +1060,13 @@ export function updateGame(state: GameState, input: InputState, dt: number): voi
       // Trigger mutator selection (after wave 1+)
       if (state.wave >= 1) {
         const ownedIds = state.activeMutators.map((m) => m.id)
-        state.mutatorChoices = getRandomMutators(3, ownedIds)
+        if (state.bossWaveCompleted) {
+          // Boss reward: all 3 choices are epic
+          state.mutatorChoices = getEpicMutators(3, ownedIds)
+          state.bossWaveCompleted = false
+        } else {
+          state.mutatorChoices = getRandomMutators(3, ownedIds)
+        }
         if (state.mutatorChoices.length > 0) {
           state.mutatorSelectionActive = true
           state.mutatorSelectionTimer = 0
@@ -994,12 +1195,39 @@ export function renderGame(
     assets,
     // Damage numbers
     state.damageNumbers,
+    // Educational layer
+    state.quizEnabled,
+    state.selectedGrade,
+    state.hebrewLayoutActive,
+    state.keyboardPanelTimer,
+    state.letterFlashes,
+    state.questionPhase,
+    state.currentQuestion,
+    state.questionResult,
+    state.questionRetryAvailable,
+    state.questionFeedbackTimer,
+    state.pendingMutatorIndex,
+    // Difficulty badge label (empty string = Normal, hidden)
+    state.quizEnabled
+      ? (state.selectedGrade <= 2 ? 'VERY EASY' : 'CLASSROOM')
+      : state.difficulty === 'very_easy' ? 'VERY EASY'
+      : state.difficulty === 'easy' ? 'EASY'
+      : state.difficulty === 'arcade' ? 'ARCADE'
+      : '',
+    // Pause menu
+    state.paused,
+    state.pauseMenuSelection,
+    // Run stats
+    state.totalKills,
+    state.totalDamageDealt,
+    state.contractsCompleted,
+    state.activeMutators.length,
   )
 }
 
 export function resetGame(state: GameState): GameState {
   const hs = state.highScore
-  const newState = createGameState(state.isDailyChallenge)
+  const newState = createGameState(state.isDailyChallenge, state.selectedGrade, state.quizEnabled, state.selectedTopicId, state.difficulty)
   newState.highScore = hs
   return newState
 }

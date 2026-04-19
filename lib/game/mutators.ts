@@ -334,6 +334,37 @@ export function getRandomMutators(
   return selected
 }
 
+/** Pick `count` guaranteed-epic mutators (boss reward). Falls back to any rarity if epics run out. */
+export function getEpicMutators(count: number, ownedIds: MutatorId[]): Mutator[] {
+  const ownedCount: Record<string, number> = {}
+  for (const id of ownedIds) {
+    ownedCount[id] = (ownedCount[id] || 0) + 1
+  }
+  const available = MUTATOR_POOL.filter((m) => {
+    const c = ownedCount[m.id] || 0
+    if (c === 0) return true
+    if (m.stackEffects && c <= m.stackEffects.length) return true
+    return false
+  })
+  const epics = available.filter(m => m.rarity === 'epic')
+  const pool = epics.length >= count ? epics : available
+  // Shuffle
+  const shuffled = [...pool]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  const selected: Mutator[] = []
+  const seenIds = new Set<MutatorId>()
+  for (const m of shuffled) {
+    if (!seenIds.has(m.id) && selected.length < count) {
+      selected.push(m)
+      seenIds.add(m.id)
+    }
+  }
+  return selected
+}
+
 /**
  * Compute combined modifiers from all active mutators.
  * Multipliers stack multiplicatively, bonuses stack additively.

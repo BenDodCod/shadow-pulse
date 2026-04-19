@@ -19,6 +19,9 @@ export const ENEMY_COLORS = {
   sniper: '#ffaa22',
   heavy: '#ff6633',
   fast: '#22ffaa',
+  shielder: '#55bbff',
+  spawner: '#ee55ff',
+  boss: '#cc00ff',
 }
 export const PULSE_WAVE_COLOR = '#6622ff'
 export const NEON_GLOW = '#7b2fff'
@@ -141,6 +144,43 @@ export const FAST_ENEMY = {
   color: ENEMY_COLORS.fast,
 }
 
+export const SHIELDER_ENEMY = {
+  hp: 70,
+  speed: 70,
+  damage: 14,
+  attackRange: 50,
+  attackCooldown: 1.8,
+  color: ENEMY_COLORS.shielder,
+}
+
+export const SPAWNER_ENEMY = {
+  hp: 45,
+  speed: 35,
+  damage: 0,
+  attackRange: 0,
+  attackCooldown: 999,
+  color: ENEMY_COLORS.spawner,
+  spawnInterval: 3.5,
+  maxSpawns: 4,
+}
+
+export const BOSS_ENEMY = {
+  hp: 450,
+  speed: 75,
+  damage: 28,
+  size: 40,
+  color: ENEMY_COLORS.boss,
+  attackRange: 70,
+  attackCooldown: 1.0,
+  chargeWindup: 0.65,
+  chargeSpeed: 360,
+  chargeDuration: 0.35,
+  chargeCooldown: 3.0,
+  ringPulseCooldown: 1.8,
+}
+
+export const BOSS_WAVE_INTERVAL = 5 // boss spawns on wave 5, 10, 15, ...
+
 // Contract Banner
 export const CONTRACT_BANNER_Y = 70
 export const CONTRACT_BANNER_HEIGHT = 50
@@ -151,6 +191,9 @@ export const DEATH_HINTS: Record<string, string> = {
   sniper: "Snipers telegraph with a red laser. Dash diagonally when you see it!",
   heavy: "Heavy shockwaves have limited range. Stay outside and strike after!",
   fast: "Fast enemies dodge light attacks. Use heavy or pulse wave to catch them!",
+  shielder: "Shielders block frontal attacks. Circle behind them or use Pulse Wave!",
+  spawner: "Kill Spawners first — they keep adding enemies until you do!",
+  boss: "The Boss telegraphs charges with a bright glow. Dash to the side, then punish!",
   none: "Keep practicing! Use dash (Space/Shift) to avoid damage.",
 }
 
@@ -188,3 +231,49 @@ export const DAMAGE_NUMBER_COLORS: Record<string, string> = {
   heavy: '#ffaa22',
   pulse: '#44ccff',
 }
+
+// ── Difficulty System ─────────────────────────────────────────────────────────
+export type DifficultyLevel = 'very_easy' | 'easy' | 'normal' | 'arcade'
+
+export interface DifficultyPreset {
+  enemyDamageMult: number   // multiplied on top of level-based scaling
+  enemySpeedMult: number
+  enemyHpMult: number
+  playerHpBonus: number     // flat HP added to base PLAYER_HP (can be negative)
+  waveCountMult: number     // scales enemy count per wave (min 1 per type)
+  hazardDamageMult: number
+  shrinkStartWave: number   // wave number when arena starts shrinking
+}
+
+export const DIFFICULTY_PRESETS: Record<DifficultyLevel | 'classroom', DifficultyPreset> = {
+  // Grades 1-2 classroom and standalone option for very young/new players
+  very_easy: {
+    enemyDamageMult: 0.40, enemySpeedMult: 0.55, enemyHpMult: 0.60,
+    playerHpBonus: 100, waveCountMult: 0.60, hazardDamageMult: 0.20, shrinkStartWave: 18,
+  },
+  easy: {
+    enemyDamageMult: 0.60, enemySpeedMult: 0.72, enemyHpMult: 0.75,
+    playerHpBonus: 50, waveCountMult: 0.75, hazardDamageMult: 0.50, shrinkStartWave: 12,
+  },
+  normal: {
+    enemyDamageMult: 1.00, enemySpeedMult: 1.00, enemyHpMult: 1.00,
+    playerHpBonus: 0,  waveCountMult: 1.00, hazardDamageMult: 1.00, shrinkStartWave: 10,
+  },
+  arcade: {
+    enemyDamageMult: 1.25, enemySpeedMult: 1.12, enemyHpMult: 1.20,
+    playerHpBonus: -15, waveCountMult: 1.20, hazardDamageMult: 1.25, shrinkStartWave: 8,
+  },
+  // Grades 3-6 classroom override (quiz-gated mutators, educational focus)
+  classroom: {
+    enemyDamageMult: 0.65, enemySpeedMult: 0.75, enemyHpMult: 0.80,
+    playerHpBonus: 30,  waveCountMult: 0.75, hazardDamageMult: 0.40, shrinkStartWave: 14,
+  },
+}
+
+// ── Hebrew Classroom Educational Layer ───────────────────────────────────────
+export const QUESTION_FEEDBACK_DURATION = 2000   // ms to show correct answer after wrong attempt
+export const KEYBOARD_PANEL_FADE_DELAY = 30000   // ms before panel fades (Grade 3-4)
+export const LETTER_FLASH_LIFETIME = 1.2         // seconds letter flash visible
+export const KEYBOARD_PANEL_GRADES = [1, 2, 3, 4] // grades that show the keyboard panel
+export const LETTER_FLASH_GRADES = [1, 2, 3, 4]   // grades that show letter flashes
+export const QUIZ_GRADES = [3, 4, 5, 6]            // grades that get the post-wave quiz
